@@ -292,6 +292,11 @@ endif()
 # Libultraship Integration                                                     #
 #==============================================================================#
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(SHIP_ANDROID_JNI_CLASS "com_ghostship_android_MainActivity" CACHE STRING
+        "JNI-mangled class name for libultraship Android native methods")
+endif()
+
 add_subdirectory(libultraship ${CMAKE_CURRENT_SOURCE_DIR}/libultraship)
 add_dependencies(${PROJECT_NAME} libultraship)
 target_link_libraries(${PROJECT_NAME} PRIVATE libultraship)
