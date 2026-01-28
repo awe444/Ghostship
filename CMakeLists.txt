@@ -131,7 +131,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 ################################################################################
 # Global configuration types
 ################################################################################
-if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
 set(CMAKE_C_FLAGS_DEBUG "-g -ffast-math -DDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -ffast-math -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "-O3 -ffast-math -DNDEBUG")
@@ -163,21 +163,13 @@ add_compile_definitions(
 )
 
 # Find necessary libraries
-if (UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE AND NOT ANDROID)
 find_package(OpenGL REQUIRED)
 endif()
 
 configure_file( ${CMAKE_CURRENT_SOURCE_DIR}/properties.h.in ${CMAKE_CURRENT_SOURCE_DIR}/properties.h @ONLY)
 
-# Include directories
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}/include
-    ${DIRECTORIES_TO_INCLUDE}
-)
+# Include directories are set per-target to avoid leaking into dependencies.
 
 # Collect source files to build the executable
 file(GLOB_RECURSE ALL_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
@@ -259,6 +251,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
         MACOSX_BUNDLE_INFO_PLIST ${IOS_DIR}/plist.in
         RESOURCE "${IMAGE_FILES};${STORYBOARD_FILE};${ICON_FILES}"
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_library(${PROJECT_NAME} SHARED ${ALL_FILES})
 else()
     add_executable(${PROJECT_NAME} ${ALL_FILES})
 endif()
@@ -302,6 +296,12 @@ add_subdirectory(libultraship ${CMAKE_CURRENT_SOURCE_DIR}/libultraship)
 add_dependencies(${PROJECT_NAME} libultraship)
 target_link_libraries(${PROJECT_NAME} PRIVATE libultraship)
 target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/include
+    ${DIRECTORIES_TO_INCLUDE}
     ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include
     ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include/libultraship
 )
@@ -365,6 +365,14 @@ endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	set(ADDITIONAL_LIBRARY_DEPENDENCIES
         "$<$<BOOL:${USE_NETWORKING}>:SDL2_net::SDL2_net-static>"
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
+
+    set(ADDITIONAL_LIBRARY_DEPENDENCIES
+        SDL2::SDL2
+        Threads::Threads
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
     find_package(SDL2)
@@ -582,6 +590,28 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
               -Wno-stringop-overflow
           >
       )
+  elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
+      target_compile_options(${PROJECT_NAME} PRIVATE
+          -O2
+
+          -Wno-error
+          -Wno-format-security
+          -Wno-multichar
+          -Wno-return-type
+          -Wno-narrowing
+          -Wno-switch-outside-range
+          $<$<COMPILE_LANGUAGE:C>:
+              -Werror-implicit-function-declaration
+              -Wno-incompatible-pointer-types
+              -Wno-discarded-array-qualifiers
+              -Wno-discarded-qualifiers
+              -Wno-int-conversion
+              -Wno-builtin-declaration-mismatch
+              -Wno-switch-unreachable
+              -Wno-stringop-overflow
+              -Wno-implicit-int
+          >
+      )
   else()
       if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
         set(CPU_OPTION -msse2 -mfpmath=sse)
@@ -624,7 +654,7 @@ add_custom_command(
 	COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/" "$<TARGET_FILE_DIR:Ghostship>/assets/"
 )
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 include(ExternalProject)
 ExternalProject_Add(TorchExternal
 	PREFIX TorchExternal

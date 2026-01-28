@@ -10,6 +10,9 @@
 #include <spdlog/fmt/fmt.h>
 #include "variables.h"
 #include <tuple>
+#if defined(__ANDROID__)
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 
 std::vector<ImVec2> windowTypeSizes = { {} };
 
@@ -545,6 +548,13 @@ void Menu::MenuDrawItem(WidgetInfo& widget, uint32_t width, UIWidgets::Colors me
         SPDLOG_ERROR("Failed to draw menu item \"{}\" due to: {}", widget.name, e.what());
         assert(false);
     }
+}
+
+void Menu::SetVisibility(bool visible) {
+    GuiWindow::SetVisibility(visible);
+#if defined(__ANDROID__)
+    Mobile::SetMenuOpen(visible);
+#endif
 }
 
 void Menu::Draw() {

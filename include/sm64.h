@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include <math.h>
+#include <string.h>
 #include <PR/gu.h>
 #include <PR/ucode.h>
 #include "port/Engine.h"
@@ -29,7 +30,7 @@ extern "C" {
 #define GAME_VERSION GameEngine_GetGameVersion()
 #define ROM_JP (GAME_VERSION == 0xE3DAA4E)
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
 #define bzero(b,len) (memset((b), '\0', (len)), (void) 0)
 #define bcopy(b1, b2, len) (memmove((b2), (b1), (len)), (void) 0)
 #endif

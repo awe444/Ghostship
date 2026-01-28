@@ -24,6 +24,12 @@
 #include <SDL2/SDL.h>
 #include <filesystem>
 
+#ifdef __ANDROID__
+#include <thread>
+#include <chrono>
+#include <jni.h>
+#endif
+
 #ifdef USE_NETWORKING
 #include <SDL2/SDL_net.h>
 #endif
@@ -67,6 +73,41 @@ bool prevAltAssets = false;
 
 GameEngine* GameEngine::Instance;
 
+#ifdef __ANDROID__
+extern "C" {
+void waitForSetupFromNative() {
+    const std::string ship_path = Ship::Context::GetPathRelativeToAppDirectory("sm64.o2r");
+    const char* sdlInternal = SDL_AndroidGetInternalStoragePath();
+    const std::string sdl_path =
+        (sdlInternal && *sdlInternal) ? (std::string(sdlInternal) + "/sm64.o2r") : ship_path;
+
+    SPDLOG_INFO("waitForSetupFromNative: Looking for sm64.o2r at ship_path='{}' and sdl_path='{}'", ship_path,
+                sdl_path);
+
+    auto exists_any = [&](void) -> bool { return std::filesystem::exists(ship_path) || std::filesystem::exists(sdl_path); };
+
+    int timeout_seconds = 300; // 5 minutes
+    int poll_count = 0;
+    while (!exists_any() && poll_count < timeout_seconds * 10) {
+        if (poll_count % 50 == 0) { // Log every 5 seconds
+            SPDLOG_INFO("waitForSetupFromNative: Still waiting for sm64.o2r... ({}s)", poll_count / 10);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        poll_count++;
+    }
+
+    if (exists_any()) {
+        const std::string found = std::filesystem::exists(ship_path) ? ship_path : sdl_path;
+        SPDLOG_INFO("waitForSetupFromNative: sm64.o2r found at: {}", found);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    } else {
+        SPDLOG_ERROR("waitForSetupFromNative: Timeout waiting for sm64.o2r. ship_path='{}' sdl_path='{}'", ship_path,
+                     sdl_path);
+    }
+}
+}
+#endif
+
 GameEngine::GameEngine() : dictionary(nullptr) {
     this->context = Ship::Context::CreateUninitializedInstance("Ghostship", "sm64", "ghostship.cfg.json");
 
@@ -76,13 +117,37 @@ GameEngine::GameEngine() : dictionary(nullptr) {
 #endif
 
     std::vector<std::string> archiveFiles;
+#ifdef __ANDROID__
+    const char* sdlInternal = SDL_AndroidGetInternalStoragePath();
+    const std::string appDir = (sdlInternal && *sdlInternal) ? std::string(sdlInternal) : std::string(".");
+    const std::string main_path = appDir + "/sm64.o2r";
+    const std::string assets_path = appDir + "/ghostship.o2r";
+#else
     const std::string main_path = Ship::Context::GetPathRelativeToAppDirectory("sm64.o2r");
     const std::string assets_path = Ship::Context::LocateFileAcrossAppDirs("ghostship.o2r");
+#endif
 
 #ifdef _WIN32
     AllocConsole();
 #endif
 
+#ifdef __ANDROID__
+    if (sdlInternal && *sdlInternal) {
+        SPDLOG_INFO("Android app/user dir set to: {}", sdlInternal);
+    } else {
+        SPDLOG_WARN("SDL_AndroidGetInternalStoragePath() returned null; using defaults");
+    }
+
+    extern void waitForSetupFromNative();
+    waitForSetupFromNative();
+
+    if (std::filesystem::exists(main_path)) {
+        archiveFiles.push_back(main_path);
+    } else {
+        SPDLOG_ERROR("sm64.o2r file still not found after user selection");
+        exit(1);
+    }
+#else
     if (std::filesystem::exists(main_path)) {
         archiveFiles.push_back(main_path);
     } else {
@@ -99,6 +164,7 @@ GameEngine::GameEngine() : dictionary(nullptr) {
             exit(1);
         }
     }
+#endif
 
     if (std::filesystem::exists(assets_path)) {
         archiveFiles.push_back(assets_path);
@@ -940,3 +1006,52 @@ extern "C" void* GameEngine_GetExactDataByName(const char* path) {
     auto asset = Ship::Context::GetInstance()->GetResourceManager()->LoadResourceProcess(path, true);
     return asset ? static_cast<void*>(asset->GetRawPointer()) : nullptr;
 }
+
+#ifdef __ANDROID__
+static const char* sCachedSaveDir = nullptr;
+
+extern "C" const char* Android_GetSaveDir() {
+    if (sCachedSaveDir != nullptr) {
+        return sCachedSaveDir;
+    }
+
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    if (env == nullptr) {
+        return nullptr;
+    }
+
+    jclass mainActivityClass = env->FindClass("com/ghostship/android/MainActivity");
+    if (mainActivityClass == nullptr) {
+        return nullptr;
+    }
+
+    jmethodID getSaveDirMethod = env->GetStaticMethodID(mainActivityClass, "getSaveDir", "()Ljava/lang/String;");
+    if (getSaveDirMethod == nullptr) {
+        env->DeleteLocalRef(mainActivityClass);
+        return nullptr;
+    }
+
+    jstring jSaveDir = (jstring)env->CallStaticObjectMethod(mainActivityClass, getSaveDirMethod);
+    if (jSaveDir == nullptr) {
+        env->DeleteLocalRef(mainActivityClass);
+        return nullptr;
+    }
+
+    const char* saveDirCStr = env->GetStringUTFChars(jSaveDir, nullptr);
+    if (saveDirCStr != nullptr) {
+        static std::string cachedPath = saveDirCStr;
+        sCachedSaveDir = cachedPath.c_str();
+        env->ReleaseStringUTFChars(jSaveDir, saveDirCStr);
+    }
+
+    env->DeleteLocalRef(jSaveDir);
+    env->DeleteLocalRef(mainActivityClass);
+
+    return sCachedSaveDir;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ghostship_android_MainActivity_nativeSetAppDirs(JNIEnv* env, jclass, jstring jpath) {
+    // No-op: paths resolved via SDL_AndroidGetInternalStoragePath in GameEngine::GameEngine()
+}
+#endif

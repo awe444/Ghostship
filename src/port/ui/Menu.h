@@ -52,6 +52,8 @@ class Menu : public GuiWindow {
                                    "Searches all menus for the given text, including tooltips.")) } } }
     };
 
+    void SetVisibility(bool visible) override;
+
   private:
     bool allowPopout = true; // PortNote: should be set to false on small screen ports
     bool popped;

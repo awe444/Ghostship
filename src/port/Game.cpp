@@ -42,3 +42,10 @@ int main() {
     GameEngine::Instance->Destroy();
     return 0;
 }
+
+#ifndef _WIN32
+extern "C" int SDL_main(int argc, char** argv) {
+    (void)argc; (void)argv;
+    return main();
+}
+#endif
