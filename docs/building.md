@@ -217,6 +217,35 @@ cmake --build build-cmake --target clean
 # Compatible Roms
 See [`supportedHashes.json`](supportedHashes.json)
 
+## Android
+
+Requires:
+  * Android Studio (or the Android SDK command-line tools)
+  * NDK version 29.0.14206865 (installed via SDK Manager)
+  * CMake 3.31.5 (installed via SDK Manager)
+  * JDK 17
+
+### Build
+
+```bash
+# Clone the repo and enter the directory
+git clone https://github.com/HarbourMasters/ghostship.git
+cd ghostship
+
+# Clone the submodules
+git submodule update --init
+
+# Generate ghostship.o2r (requires Torch – see the Torch/ directory)
+make -C Torch type=release -j$(nproc)
+Torch/cmake-build-release/torch pack port ghostship.o2r o2r
+
+# Build the APK (ghostship.o2r is copied into the APK assets automatically)
+cd android
+./gradlew assembleRelease
+```
+
+The Gradle build automatically copies `ghostship.o2r` from the repository root into the APK assets folder. If the file is not present the build still succeeds, but the APK will not contain the port O2R and the app will log a warning on first launch.
+
 ## Getting CI to work on your fork
 
 The CI works via [Github Actions](https://github.com/features/actions) where we mostly make use of machines hosted by Github; except for the very first step of the CI process called "Extract assets". This steps extracts assets from the game file and generates an "assets" folder in `mm/`.

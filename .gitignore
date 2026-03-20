@@ -86,6 +86,8 @@ code/
 !/sound/**/*custom*/**/*.aiff
 !/assets/**/*custom*.bin
 !/assets/**/*custom*/**/*.bin
+# Generated port O2R copied into Android assets by Gradle
+android/app/src/main/assets/ghostship.o2r
 # Torch hash
 torch.hash.yml
 merge/
