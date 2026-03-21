@@ -808,8 +808,8 @@ public void onBackPressed() {
 // ImGui menu is toggled.  The touch-control overlay that previously used
 // these has been removed, but the stubs must remain so the JNI lookup
 // does not crash.
-void EnableTouchArea() { }
-void DisableTouchArea() { }
+public void EnableTouchArea() { }
+public void DisableTouchArea() { }
 public void setMenuOpen(boolean open) { }
 }
 
