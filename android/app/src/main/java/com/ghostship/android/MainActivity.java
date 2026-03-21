@@ -21,15 +21,8 @@ import java.io.FileOutputStream;
 import java.util.concurrent.CountDownLatch;
 import androidx.documentfile.provider.DocumentFile;
 
-import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.FrameLayout;
-import android.view.LayoutInflater;
-import android.view.MotionEvent;
-import android.view.View;
-import android.widget.ImageView;
 import android.view.KeyEvent;
-import android.content.pm.ActivityInfo;
+import android.view.View;
 import android.os.Build;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -52,12 +45,6 @@ SharedPreferences preferences;
 private static final CountDownLatch setupLatch = new CountDownLatch(1);
 private Uri userFolderUri; // Persisted SAF tree URI
 
-// ===== Native methods =====
-public native void attachController();
-public native void detachController();
-public native void setButton(int button, boolean value);
-public native void setCameraState(int axis, float value);
-public native void setAxis(int axis, short value);
 
 // ===== Save dir for the engine (internal only; no extra subfolder) =====
 public static String getSaveDir() {
@@ -189,9 +176,6 @@ protected void onCreate(Bundle savedInstanceState) {
     // Enable immersive mode (edge-to-edge)
     enableImmersiveMode();
     
-setupControllerOverlay();
-    attachController();
-
     // Seed internal directory with assets if they exist (optional)
     seedInternalFromAssetsIfPresent();
 
@@ -746,73 +730,19 @@ private String guessMime(String name) {
     return "application/octet-stream";
 }
 
-// ================= Controller overlay and touch handling =================
-private Button buttonA, buttonB, buttonX, buttonY;
-private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-private Button buttonLB, buttonRB, buttonZ, buttonStart, buttonBack, buttonToggle, buttonMenu;
-private FrameLayout leftJoystick;
-private ImageView leftJoystickKnob;
-private View overlayView;
-
-private void setupControllerOverlay() {
-    LayoutInflater inflater = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
-    overlayView = inflater.inflate(R.layout.touchcontrol_overlay, null);
-    FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-    );
-    overlayView.setLayoutParams(layoutParams);
-    ViewGroup rootView = (ViewGroup) this.getWindow().getDecorView().findViewById(android.R.id.content);
-    rootView.addView(overlayView);
-
-    final ViewGroup buttonGroup = overlayView.findViewById(R.id.button_group);
-
-    buttonA = overlayView.findViewById(R.id.buttonA);
-    buttonB = overlayView.findViewById(R.id.buttonB);
-    buttonX = overlayView.findViewById(R.id.buttonX);
-    buttonY = overlayView.findViewById(R.id.buttonY);
-
-    buttonDpadUp = overlayView.findViewById(R.id.buttonDpadUp);
-    buttonDpadDown = overlayView.findViewById(R.id.buttonDpadDown);
-    buttonDpadLeft = overlayView.findViewById(R.id.buttonDpadLeft);
-    buttonDpadRight = overlayView.findViewById(R.id.buttonDpadRight);
-
-    buttonLB = overlayView.findViewById(R.id.buttonLB);
-    buttonRB = overlayView.findViewById(R.id.buttonRB);
-    buttonZ = overlayView.findViewById(R.id.buttonZ);
-
-    buttonStart = overlayView.findViewById(R.id.buttonStart);
-    buttonBack = overlayView.findViewById(R.id.buttonBack);
-    buttonMenu = overlayView.findViewById(R.id.buttonMenu);
-
-    buttonToggle = overlayView.findViewById(R.id.buttonToggle);
-
-    leftJoystick = overlayView.findViewById(R.id.left_joystick);
-    leftJoystickKnob = overlayView.findViewById(R.id.left_joystick_knob);
-
-    FrameLayout rightScreenArea = overlayView.findViewById(R.id.right_screen_area);
-
-    addTouchListener(buttonA, ControllerButtons.BUTTON_A);
-    addTouchListener(buttonB, ControllerButtons.BUTTON_B);
-    addTouchListener(buttonX, ControllerButtons.BUTTON_X);
-    addTouchListener(buttonY, ControllerButtons.BUTTON_Y);
-
-    setupCButtons(buttonDpadUp, ControllerButtons.AXIS_RY, 1);
-    setupCButtons(buttonDpadDown, ControllerButtons.AXIS_RY, -1);
-    setupCButtons(buttonDpadLeft, ControllerButtons.AXIS_RX, 1);
-    setupCButtons(buttonDpadRight, ControllerButtons.AXIS_RX, -1);
-
-    addTouchListener(buttonLB, ControllerButtons.BUTTON_LB);
-    addTouchListener(buttonRB, ControllerButtons.BUTTON_RB);
-    addTouchListener(buttonZ, ControllerButtons.AXIS_RT);
-
-    addTouchListener(buttonStart, ControllerButtons.BUTTON_START);
-    addTouchListener(buttonBack, ControllerButtons.BUTTON_BACK);
-    setupMenuButton(buttonMenu);
-
-    setupJoystick(leftJoystick, leftJoystickKnob, true);
-    setupLookAround(rightScreenArea);
-    setupToggleButton(buttonToggle, buttonGroup);
+// ================= Gamepad Select button → ImGui menu toggle =================
+@Override
+public boolean dispatchKeyEvent(KeyEvent event) {
+    // Map the gamepad Select button to Escape so it toggles the ImGui menu
+    if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_SELECT) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            onNativeKeyDown(KeyEvent.KEYCODE_ESCAPE);
+        } else if (event.getAction() == KeyEvent.ACTION_UP) {
+            onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
+        }
+        return true;
+    }
+    return super.dispatchKeyEvent(event);
 }
 
 private void enableImmersiveMode() {
@@ -874,214 +804,12 @@ public void onBackPressed() {
         .show();
 }
 
-private void setupMenuButton(Button button) {
-    button.setOnTouchListener(new View.OnTouchListener() {
-        @Override
-        public boolean onTouch(View v, MotionEvent event) {
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    onNativeKeyDown(KeyEvent.KEYCODE_ESCAPE);
-                    button.setPressed(true);
-                    // Toggle menu state and controls
-                    MenuOpen = !MenuOpen;
-                    if (MenuOpen) {
-                        DisableAllControls();
-                    } else {
-                        EnableAllControls();
-                    }
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
-                    button.setPressed(false);
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
-                    return true;
-            }
-            return false;
-        }
-    });
-}
-
-private void setupToggleButton(Button button, ViewGroup uiGroup) {
-    boolean isHidden = preferences.getBoolean("controlsVisible", false);
-    uiGroup.setVisibility(isHidden ? View.INVISIBLE : View.VISIBLE);
-    button.setOnClickListener(new View.OnClickListener() {
-        boolean isHidden = false;
-        @Override
-        public void onClick(View v) {
-            if (isHidden) {
-                uiGroup.setVisibility(View.VISIBLE);
-            } else {
-                uiGroup.setVisibility(View.INVISIBLE);
-            }
-            preferences.edit().putBoolean("controlsVisible", !isHidden).apply();
-            isHidden = !isHidden;
-        }
-    });
-}
-
-private void addTouchListener(Button button, int buttonNum) {
-    button.setOnTouchListener(new View.OnTouchListener() {
-        @Override
-        public boolean onTouch(View v, MotionEvent event) {
-            if (!AllControlsEnabled) return false;
-            
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    setButton(buttonNum, true);
-                    button.setPressed(true);
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    setButton(buttonNum, false);
-                    button.setPressed(false);
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    setButton(buttonNum, false);
-                    return true;
-            }
-            return false;
-        }
-    });
-}
-
-private void setupCButtons(Button button, int buttonNum, int direction) {
-    button.setOnTouchListener(new View.OnTouchListener() {
-        @Override
-        public boolean onTouch(View v, MotionEvent event) {
-            if (!AllControlsEnabled) return false;
-            
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    setAxis(buttonNum, direction < 0 ? Short.MAX_VALUE : Short.MIN_VALUE);
-                    button.setPressed(true);
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    setAxis(buttonNum, (short) 0);
-                    button.setPressed(false);
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    setAxis(buttonNum, (short) 0);
-                    return true;
-            }
-            return false;
-        }
-    });
-}
-
-// Control state management
-private boolean TouchAreaEnabled = true;
-private boolean MenuOpen = false;
-private boolean AllControlsEnabled = true;
-
-private void DisableTouchArea() {
-    TouchAreaEnabled = false;
-}
-
-private void EnableTouchArea() {
-    TouchAreaEnabled = true;
-}
-
-private void DisableAllControls() {
-    AllControlsEnabled = false;
-    TouchAreaEnabled = false;
-}
-
-private void EnableAllControls() {
-    AllControlsEnabled = true;
-    TouchAreaEnabled = true;
-}
-
-public void setMenuOpen(boolean open) {
-    MenuOpen = open;
-    if (MenuOpen) {
-        DisableAllControls();
-    } else {
-        EnableAllControls();
-    }
-}
-
-private void setupLookAround(FrameLayout rightScreenArea) {
-    rightScreenArea.setOnTouchListener(new View.OnTouchListener() {
-        private float lastX = 0;
-        private float lastY = 0;
-        private boolean isTouching = false;
-
-        @Override
-        public boolean onTouch(View v, MotionEvent event) {
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    lastX = event.getX();
-                    lastY = event.getY();
-                    isTouching = true;
-                    break;
-                case MotionEvent.ACTION_MOVE:
-                    if (isTouching) {
-                        float deltaX = event.getX() - lastX;
-                        float deltaY = event.getY() - lastY;
-                        lastX = event.getX();
-                        lastY = event.getY();
-                        float sensitivityMultiplier = 15;
-                        float rx = (deltaX * sensitivityMultiplier);
-                        float ry = (deltaY * sensitivityMultiplier);
-                        setCameraState(0, rx);
-                        setCameraState(1, ry);
-                    }
-                    break;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    isTouching = false;
-                    setCameraState(0, 0.0f);
-                    setCameraState(1, 0.0f);
-                    break;
-            }
-            return TouchAreaEnabled && AllControlsEnabled;
-        }
-    });
-}
-
-private void setupJoystick(FrameLayout joystickLayout, ImageView joystickKnob, boolean isLeft) {
-    joystickLayout.post(() -> {
-        final float joystickCenterX = joystickLayout.getWidth() / 2f;
-        final float joystickCenterY = joystickLayout.getHeight() / 2f;
-
-        joystickLayout.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if (!AllControlsEnabled) return false;
-                
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                    case MotionEvent.ACTION_MOVE:
-                        float deltaX = event.getX() - joystickCenterX;
-                        float deltaY = event.getY() - joystickCenterY;
-                        float maxRadius = joystickLayout.getWidth() / 2f - joystickKnob.getWidth() / 2f;
-                        float distance = (float) Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-                        if (distance > maxRadius) {
-                            float scale = maxRadius / distance;
-                            deltaX *= scale;
-                            deltaY *= scale;
-                        }
-                        joystickKnob.setX(joystickCenterX + deltaX - joystickKnob.getWidth() / 2f);
-                        joystickKnob.setY(joystickCenterY + deltaY - joystickKnob.getHeight() / 2f);
-
-                        short x = (short) (deltaX / maxRadius * Short.MAX_VALUE);
-                        short y = (short) (deltaY / maxRadius * Short.MAX_VALUE);
-                        setAxis(isLeft ? ControllerButtons.AXIS_LX : ControllerButtons.AXIS_RX, x);
-                        setAxis(isLeft ? ControllerButtons.AXIS_LY : ControllerButtons.AXIS_RY, y);
-                        break;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        joystickKnob.setX(joystickCenterX - joystickKnob.getWidth() / 2f);
-                        joystickKnob.setY(joystickCenterY - joystickKnob.getHeight() / 2f);
-                        setAxis(isLeft ? ControllerButtons.AXIS_LX : ControllerButtons.AXIS_RX, (short) 0);
-                        setAxis(isLeft ? ControllerButtons.AXIS_LY : ControllerButtons.AXIS_RY, (short) 0);
-                        break;
-                }
-                return true;
-            }
-        });
-    });
-}
+// Called from native code (libultraship MobileImpl.cpp) via JNI when the
+// ImGui menu is toggled.  The touch-control overlay that previously used
+// these has been removed, but the stubs must remain so the JNI lookup
+// does not crash.
+public void EnableTouchArea() { }
+public void DisableTouchArea() { }
+public void setMenuOpen(boolean open) { }
 }
 
