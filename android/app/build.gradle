@@ -14,6 +14,24 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+// Copy ghostship.o2r from the repo root into a generated assets directory at
+// configuration time so the Android Gradle Plugin includes it in mergeAssets.
+def generatedAssetsDir = file("${buildDir}/generated/ghostship-assets")
+def repoRootO2R = rootProject.file("../ghostship.o2r")
+generatedAssetsDir.mkdirs()
+if (repoRootO2R.exists()) {
+    def destFile = new File(generatedAssetsDir, "ghostship.o2r")
+    if (!destFile.exists() || repoRootO2R.lastModified() > destFile.lastModified()) {
+        copy {
+            from repoRootO2R
+            into generatedAssetsDir
+        }
+        logger.lifecycle("ghostship.o2r found – copied to generated assets")
+    }
+} else {
+    logger.warn("ghostship.o2r not found at ${repoRootO2R.absolutePath} – APK will not include port O2R")
+}
+
 android {
     namespace("com.ghostship.android")
     buildFeatures {
@@ -44,7 +62,7 @@ android {
         externalNativeBuild {
             cmake {
                  arguments "-DSDL_SHARED=ON", "-DANDROID_STL=c++_static", "-DHAVE_LD_VERSION_SCRIPT=OFF",'-DUSE_OPENGLES=ON'
-                 abiFilters 'arm64-v8a', 'armeabi-v7a'
+                 abiFilters 'arm64-v8a'
             }
         }
         
@@ -93,6 +111,7 @@ android {
     if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
         sourceSets.main {
             jniLibs.srcDir 'libs'
+            assets.srcDirs += [generatedAssetsDir]
         }
         externalNativeBuild {
             cmake {
