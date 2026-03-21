@@ -14,6 +14,24 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+// Copy ghostship.o2r from the repo root into a generated assets directory at
+// configuration time so the Android Gradle Plugin includes it in mergeAssets.
+def generatedAssetsDir = file("${buildDir}/generated/ghostship-assets")
+def repoRootO2R = rootProject.file("../ghostship.o2r")
+generatedAssetsDir.mkdirs()
+if (repoRootO2R.exists()) {
+    def destFile = new File(generatedAssetsDir, "ghostship.o2r")
+    if (!destFile.exists() || repoRootO2R.lastModified() > destFile.lastModified()) {
+        copy {
+            from repoRootO2R
+            into generatedAssetsDir
+        }
+        logger.lifecycle("ghostship.o2r found – copied to generated assets")
+    }
+} else {
+    logger.warn("ghostship.o2r not found at ${repoRootO2R.absolutePath} – APK will not include port O2R")
+}
+
 android {
     namespace("com.ghostship.android")
     buildFeatures {
@@ -89,28 +107,11 @@ android {
     applicationVariants.all { variant ->
         tasks["merge${variant.name.capitalize()}Assets"]
             .dependsOn("externalNativeBuild${variant.name.capitalize()}")
-
-        def copyTaskName = "copyPortO2R${variant.name.capitalize()}"
-        tasks.register(copyTaskName) {
-            def sourceFile = file("${rootProject.projectDir}/../ghostship.o2r")
-            def destDir = file("${projectDir}/src/main/assets")
-            doLast {
-                if (sourceFile.exists()) {
-                    copy {
-                        from sourceFile
-                        into destDir
-                    }
-                    logger.lifecycle("Copied ghostship.o2r to Android assets")
-                } else {
-                    logger.warn("ghostship.o2r not found at ${sourceFile.absolutePath} – APK will not include port O2R")
-                }
-            }
-        }
-        tasks["merge${variant.name.capitalize()}Assets"].dependsOn(copyTaskName)
     }
     if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
         sourceSets.main {
             jniLibs.srcDir 'libs'
+            assets.srcDirs += [generatedAssetsDir]
         }
         externalNativeBuild {
             cmake {
