@@ -58,7 +58,7 @@ android {
         minSdkVersion 24
         targetSdkVersion 36
         versionCode 1
-        versionName "1.0.1"
+        versionName "1.0.2"
         externalNativeBuild {
             cmake {
                  arguments "-DSDL_SHARED=ON", "-DANDROID_STL=c++_static", "-DHAVE_LD_VERSION_SCRIPT=OFF",'-DUSE_OPENGLES=ON'
