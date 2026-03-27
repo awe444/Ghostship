@@ -31,10 +31,22 @@ void bhv_piranha_plant_bubble_loop(void) {
     struct Object *parent = o->parentObj; // the Piranha Plant
     f32 scale = 0;
     s32 i;
-    s32 animFrame = parent->header.gfx.animInfo.animFrame;
+    s32 animFrame;
     // TODO: rename lastFrame if it is inaccurate
-    s32 lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
+    s32 lastFrame;
     UNUSED u8 filler[4];
+
+    if (parent == NULL || parent == o || parent->activeFlags == ACTIVE_FLAG_DEACTIVATED) {
+        obj_mark_for_deletion(o);
+        return;
+    }
+
+    if (parent->header.gfx.animInfo.curAnim == NULL) {
+        return;
+    }
+
+    animFrame = parent->header.gfx.animInfo.animFrame;
+    lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
 
     cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f);
 
