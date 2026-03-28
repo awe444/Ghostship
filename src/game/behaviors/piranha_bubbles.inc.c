@@ -31,9 +31,6 @@ void bhv_piranha_plant_bubble_loop(void) {
     struct Object *parent = o->parentObj; // the Piranha Plant
     f32 scale = 0;
     s32 i;
-    s32 animFrame;
-    // TODO: rename lastFrame if it is inaccurate
-    s32 lastFrame;
     UNUSED u8 filler[4];
 
     if (parent == NULL || parent == o || parent->activeFlags == ACTIVE_FLAG_DEACTIVATED) {
@@ -41,19 +38,9 @@ void bhv_piranha_plant_bubble_loop(void) {
         return;
     }
 
-    if (parent->header.gfx.animInfo.curAnim == NULL) {
-        return;
-    }
-
-    animFrame = parent->header.gfx.animInfo.animFrame;
-    lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
-
-    cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f);
-
     switch (o->oAction) {
         case PIRANHA_PLANT_BUBBLE_ACT_IDLE:
             cur_obj_disable_rendering();
-            scale = 0;
 
             if (parent->oAction == PIRANHA_PLANT_ACT_SLEEPING) {
                 o->oAction++; // move to PIRANHA_PLANT_BUBBLE_ACT_GROW_SHRINK_LOOP
@@ -61,6 +48,20 @@ void bhv_piranha_plant_bubble_loop(void) {
             break;
 
         case PIRANHA_PLANT_BUBBLE_ACT_GROW_SHRINK_LOOP:
+        {
+            // TODO: rename lastFrame if it is inaccurate
+            s32 animFrame;
+            s32 lastFrame;
+
+            if (parent->header.gfx.animInfo.curAnim == NULL) {
+                break;
+            }
+
+            animFrame = parent->header.gfx.animInfo.animFrame;
+            lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
+
+            cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f);
+
             if (parent->oDistanceToMario < parent->oDrawingDistance) {
                 cur_obj_enable_rendering();
 
@@ -98,6 +99,7 @@ void bhv_piranha_plant_bubble_loop(void) {
                 cur_obj_disable_rendering();
             }
             break;
+        }
 
         case PIRANHA_PLANT_BUBBLE_ACT_BURST:
             cur_obj_disable_rendering();
