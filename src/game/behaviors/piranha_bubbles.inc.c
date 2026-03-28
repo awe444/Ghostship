@@ -1,4 +1,6 @@
 
+#include <math.h>
+
 /**
  * Behavior for bhvPiranhaPlantBubble and bhvPiranhaPlantWakingBubbles.
  *
@@ -60,7 +62,18 @@ void bhv_piranha_plant_bubble_loop(void) {
             animFrame = parent->header.gfx.animInfo.animFrame;
             lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
 
-            cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f);
+            // Inline cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f) using
+            // cosf/sinf to avoid gSineTable page boundary access issue on ARM64.
+            {
+                f32 angle_rad = (f32)((u16)parent->oMoveAngleYaw) * (f32)(2.0 * M_PI / 65536.0);
+                f32 facingZ = cosf(angle_rad);
+                f32 facingX = sinf(angle_rad);
+
+                o->oMoveAngleYaw = parent->oMoveAngleYaw;
+                o->oPosX = parent->oPosX + 180.0f * facingX;
+                o->oPosY = parent->oPosY + 72.0f;
+                o->oPosZ = parent->oPosZ + 180.0f * facingZ;
+            }
 
             if (parent->oDistanceToMario < parent->oDrawingDistance) {
                 cur_obj_enable_rendering();
@@ -80,13 +93,18 @@ void bhv_piranha_plant_bubble_loop(void) {
                     // Note that the bubble always starts this loop at its largest.
                     if (animFrame < doneShrinkingFrame) {
                         // Shrink from 5.0f to 1.0f.
-                        scale = coss(animFrame / doneShrinkingFrame * 0x4000) * 4.0f + 1.0;
+                        // Use cosf instead of coss table lookup to avoid
+                        // gSineTable page boundary access issue on ARM64.
+                        // coss(ratio * 0x4000) = cos(ratio * pi/2)
+                        scale = cosf(animFrame / doneShrinkingFrame * (f32)(M_PI / 2)) * 4.0f + 1.0f;
                     } else if (animFrame > beginGrowingFrame) {
                         // Grow from 1.0f to 5.0f.
-                        scale = sins((
+                        // Use sinf instead of sins table lookup (same reason).
+                        // sins(ratio * 0x4000) = sin(ratio * pi/2)
+                        scale = sinf((
                                     // they should have used beginGrowingFrame here:
                                     (animFrame - (lastFrame / 2.0f + 4.0f)) / beginGrowingFrame
-                                    ) * 0x4000) * 4.0f + 1.0;
+                                    ) * (f32)(M_PI / 2)) * 4.0f + 1.0f;
                     } else {
                         // Stay at 1.0f for a few frames.
                         scale = 1.0f;
