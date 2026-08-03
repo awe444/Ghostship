@@ -2,6 +2,7 @@
 #define MACROS_H
 
 #include "platform_info.h"
+#include <ship/Api.h>
 
 #ifndef __sgi
 #define GLOBAL_ASM(...)
@@ -11,6 +12,16 @@
 
 #define GLUE(a, b) a ## b
 #define GLUE2(a, b) GLUE(a, b)
+
+#ifdef _WIN32
+#ifndef __DLL__
+#define extern_s API_EXTERN __declspec(dllexport)
+#else
+#define extern_s API_EXTERN __declspec(dllimport)
+#endif
+#else
+#define extern_s API_EXTERN
+#endif
 
 // Avoid compiler warnings for unused variables
 #ifdef __GNUC__
@@ -46,6 +57,12 @@
 #else
 #define ALIGNED16
 #endif
+
+#define ROUND_UP_64(v) (((v) + 63) & ~63)
+#define ROUND_UP_32(v) (((v) + 31) & ~31)
+#define ROUND_UP_16(v) (((v) + 15) & ~15)
+#define ROUND_UP_8(v) (((v) + 7) & ~7)
+#define ROUND_DOWN_16(v) ((v) & ~0xf)
 
 // no conversion needed other than cast
 #define VIRTUAL_TO_PHYSICAL(addr)   ((uintptr_t)(addr))
@@ -145,5 +162,19 @@
 #define gsSPGeometryModeSetFirst(c, s)					\
 	gsSPSetGeometryMode(s),						\
 	gsSPClearGeometryMode(c)
+
+#define gDPLoadTextureBlockWide(pkt, timg, fmt, siz, width, height, pal, cms, cmt, masks, maskt, shifts, shiftt)          \
+    _DW({                                                                                                             \
+        gDPSetTextureImage(pkt, fmt, siz##_LOAD_BLOCK, 1, timg);                                                      \
+        gDPSetTile(pkt, fmt, siz##_LOAD_BLOCK, 0, 0, G_TX_LOADTILE, 0, cmt, maskt, shiftt, cms, masks, shifts);       \
+        gDPLoadSync(pkt);                                                                                             \
+        gDPLoadBlockWide(pkt, G_TX_LOADTILE, 0, 0, (((width) * (height) + siz##_INCR) >> siz##_SHIFT) - 1,                \
+                     CALC_DXT(width, siz##_BYTES));                                                                   \
+        gDPPipeSync(pkt);                                                                                             \
+        gDPSetTile(pkt, fmt, siz, (((width)*siz##_LINE_BYTES) + 7) >> 3, 0, G_TX_RENDERTILE, pal, cmt, maskt, shiftt, \
+                   cms, masks, shifts);                                                                               \
+        gDPSetTileSize(pkt, G_TX_RENDERTILE, 0, 0, ((width)-1) << G_TEXTURE_IMAGE_FRAC,                               \
+                       ((height)-1) << G_TEXTURE_IMAGE_FRAC);                                                         \
+    })
 
 #endif // MACROS_H

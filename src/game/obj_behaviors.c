@@ -35,7 +35,7 @@
 #include "assets/levels/castle_inside.h"
 #include "assets/levels/ccm.h"
 
-#include "port/hooks/list/PlayerEvent.h"
+#include "port/events/list/PlayerEvent.h"
 #include "port/mods/PortEnhancements.h"
 
 /**
@@ -55,13 +55,13 @@
 /**
  * Current object floor as defined in object_step.
  */
-static struct Surface *sObjFloor;
+struct Surface *sObjFloor;
 
 /**
  * Set to false when an object close to the floor should not be oriented in reference
  * to it. Happens with boulder, falling pillar, and the rolling snowman body.
  */
-static s8 sOrientObjWithFloor = TRUE;
+s8 sOrientObjWithFloor = TRUE;
 
 /**
  * Keeps track of Mario's previous non-zero room.
@@ -533,11 +533,15 @@ void set_object_visibility(struct Object *obj, s32 dist) {
     f32 objY = obj->oPosY;
     f32 objZ = obj->oPosZ;
 
-    if (is_point_within_radius_of_mario(objX, objY, objZ, dist) == TRUE) {
-        obj->header.gfx.node.flags &= ~GRAPH_RENDER_INVISIBLE;
-    } else {
-        obj->header.gfx.node.flags |= GRAPH_RENDER_INVISIBLE;
-    }
+    bool visible = is_point_within_radius_of_mario(objX, objY, objZ, dist) == TRUE;
+
+    CALL_CANCELLABLE_EVENT(EntityDistanceRender, &visible) {
+        if (visible) {
+            obj->header.gfx.node.flags &= ~GRAPH_RENDER_INVISIBLE;
+        } else {
+            obj->header.gfx.node.flags |= GRAPH_RENDER_INVISIBLE;
+        }
+    };
 }
 
 /**

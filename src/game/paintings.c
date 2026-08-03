@@ -335,6 +335,7 @@ void painting_state(s8 state, struct Painting *painting, struct Painting *painti
             painting->rippleDecay      = painting->passiveRippleDecay;
             painting->currRippleRate   = painting->passiveRippleRate;
             painting->dispersionFactor = painting->passiveDispersionFactor;
+            CALL_EVENT(PaintingRipple, painting);
             break;
 
         case PAINTING_ENTERED:
@@ -342,6 +343,7 @@ void painting_state(s8 state, struct Painting *painting, struct Painting *painti
             painting->rippleDecay      = painting->entryRippleDecay;
             painting->currRippleRate   = painting->entryRippleRate;
             painting->dispersionFactor = painting->entryDispersionFactor;
+            CALL_EVENT(PaintingEntered, painting);
             break;
     }
     painting->state = state;
@@ -663,7 +665,7 @@ s16 ripple_if_movable(struct Painting *painting, s16 movable, s16 posX, s16 posY
  * The `mesh` table describes the location of mesh vertices, whether they move when rippling, and what
  * triangles they belong to.
  *
- * The static mesh passed in is organized into two lists. This function only uses the first list,
+ * The mesh passed in is organized into two lists. This function only uses the first list,
  * painting_calculate_triangle_normals below uses the second one.
  *
  * The first list describes the vertices in this format:
@@ -695,7 +697,7 @@ void painting_generate_mesh(struct Painting *painting, s16 *mesh, s16 numTris) {
 /**
  * Calculate the surface normals of each triangle in the generated ripple mesh.
  *
- * The static mesh passed in is organized into two lists. This function uses the second list,
+ * The mesh passed in is organized into two lists. This function uses the second list,
  * painting_generate_mesh above uses the first one.
  *
  * The second list in `mesh` describes the mesh's triangles in this format:

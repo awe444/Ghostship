@@ -20,7 +20,10 @@
 #include "segment_symbols.h"
 #include "rumble_init.h"
 #include "port/ui/cvar_prefixes.h"
+#include "port/ui/TouchControls.h"
 #include "port/interpolation/FrameInterpolation.h"
+
+extern void mirror_mode_invert_input(void);
 
 // First 3 controller slots
 struct Controller gControllers[3];
@@ -55,8 +58,8 @@ void *gMarioAnimsMemAlloc;
 struct DmaHandlerList gMarioAnimsBuf;
 
 // fillers
-UNUSED static u8 sfillerGameInit[0x90];
-static s32 sUnusedGameInitValue = 0;
+UNUSED u8 sfillerGameInit[0x90];
+s32 sUnusedGameInitValue = 0;
 
 // General timer that runs as the game starts
 u32 gGlobalTimer = 0;
@@ -170,7 +173,7 @@ void clear_framebuffer(s32 color) {
     gDPSetCycleType(gDisplayListHead++, G_CYC_FILL);
 
     gDPSetFillColor(gDisplayListHead++, color);
-    gDPFillRectangle(gDisplayListHead++,
+    gDPFillWideRectangle(gDisplayListHead++,
                      GFX_DIMENSIONS_RECT_FROM_LEFT_EDGE(0), BORDER_HEIGHT,
                      GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(0) - 1, SCREEN_HEIGHT - BORDER_HEIGHT - 1);
 
@@ -326,8 +329,8 @@ void draw_reset_bars(void) {
     }
 
     osWritebackDCacheAll();
-    osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
-    osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
+    // osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
+    // osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
 }
 
 /**
@@ -358,14 +361,6 @@ void select_gfx_pool(void) {
     gGfxSPTask = &gGfxPool->spTask;
     gDisplayListHead = gGfxPool->buffer;
     gGfxPoolEnd = (u8 *) (gGfxPool->buffer + GFX_POOL_SIZE);
-
-    gDPSetRenderMode(gDisplayListHead++, G_RM_OPA_SURF, G_RM_OPA_SURF2);
-    gDPSetCycleType(gDisplayListHead++, G_CYC_FILL);
-    gDPSetFillColor(gDisplayListHead++, 0x0001);
-    gDPFillWideRectangle(gDisplayListHead++,
-                     GFX_DIMENSIONS_RECT_FROM_LEFT_EDGE(0), BORDER_HEIGHT,
-                     GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(0) - 1, SCREEN_HEIGHT - BORDER_HEIGHT - 1);
-    gDPSetCycleType(gDisplayListHead++, G_CYC_1CYCLE);
 }
 
 /**
@@ -377,7 +372,7 @@ void select_gfx_pool(void) {
  */
 void display_and_vsync(void) {
     profiler_log_thread5_time(BEFORE_DISPLAY_LISTS);
-    osRecvMesg(&gGfxVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
+    // osRecvMesg(&gGfxVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
     if (gGoddardVblankCallback != NULL) {
         gGoddardVblankCallback();
         gGoddardVblankCallback = NULL;
@@ -387,10 +382,10 @@ void display_and_vsync(void) {
     }
     exec_display_list(&gGfxPool->spTask);
     profiler_log_thread5_time(AFTER_DISPLAY_LISTS);
-    osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
-    osViSwapBuffer((void *) PHYSICAL_TO_VIRTUAL(gPhysicalFramebuffers[sRenderedFramebuffer]));
+    // osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
+    // osViSwapBuffer((void *) PHYSICAL_TO_VIRTUAL(gPhysicalFramebuffers[sRenderedFramebuffer]));
     profiler_log_thread5_time(THREAD5_END);
-    osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
+    // osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_NOBLOCK);
     if (++sRenderedFramebuffer == 3) {
         sRenderedFramebuffer = 0;
     }
@@ -407,7 +402,7 @@ void display_and_vsync(void) {
  * This function records distinct inputs over a 255-frame interval to RAM locations and was likely
  * used to record the demo sequences seen in the final game. This function is unused.
  */
-UNUSED static void record_demo(void) {
+UNUSED void record_demo(void) {
     // Record the player's button mask and current rawStickX and rawStickY.
     u8 buttonMask =
         ((gPlayer1Controller->buttonDown & (A_BUTTON | B_BUTTON | Z_TRIG | START_BUTTON)) >> 8)
@@ -446,8 +441,10 @@ void adjust_analog_stick(struct Controller *controller) {
     // Reset the controller's x and y floats.
     controller->stickX = 0;
     controller->stickY = 0;
+    controller->stick2X = 0;
+    controller->stick2Y = 0;
 
-    // Modulate the rawStickX and rawStickY to be the new f32 values by adding/subtracting 6.
+    // Modulate the rawStickX, rawStickY, rawStick2X and rawStick2Y to be the new f32 values by adding/subtracting 6.
     if (controller->rawStickX <= -8) {
         controller->stickX = controller->rawStickX + 6;
     }
@@ -464,9 +461,28 @@ void adjust_analog_stick(struct Controller *controller) {
         controller->stickY = controller->rawStickY - 6;
     }
 
+    if (controller->rawStick2X <= -8) {
+        controller->stick2X = controller->rawStick2X + 6;
+    }
+
+    if (controller->rawStick2X >= 8) {
+        controller->stick2X = controller->rawStick2X - 6;
+    }
+
+    if (controller->rawStick2Y <= -8) {
+        controller->stick2Y = controller->rawStick2Y + 6;
+    }
+
+    if (controller->rawStick2Y >= 8) {
+        controller->stick2Y = controller->rawStick2Y - 6;
+    }
+
     // Calculate f32 magnitude from the center by vector length.
     controller->stickMag =
         sqrtf(controller->stickX * controller->stickX + controller->stickY * controller->stickY);
+
+    controller->stick2Mag =
+        sqrtf(controller->stick2X * controller->stick2X + controller->stick2Y * controller->stick2Y);
 
     // Magnitude cannot exceed 64.0f: if it does, modify the values
     // appropriately to flatten the values down to the allowed maximum value.
@@ -474,6 +490,12 @@ void adjust_analog_stick(struct Controller *controller) {
         controller->stickX *= 64 / controller->stickMag;
         controller->stickY *= 64 / controller->stickMag;
         controller->stickMag = 64;
+    }
+
+    if (controller->stick2Mag > 64) {
+        controller->stick2X *= 64 / controller->stick2Mag;
+        controller->stick2Y *= 64 / controller->stick2Mag;
+        controller->stick2Mag = 64;
     }
 }
 
@@ -544,8 +566,9 @@ void read_controller_inputs(void) {
 
     // If any controllers are plugged in, update the controller information.
     if (gControllerBits) {
-        osRecvMesg(&gSIEventMesgQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
+        // osRecvMesg(&gSIEventMesgQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
         osContGetReadData(&gControllerPads[0]);
+        TouchControls_ApplyPad(&gControllerPads[0]);
 #if ENABLE_RUMBLE
         release_rumble_pak_control();
 #endif
@@ -559,19 +582,29 @@ void read_controller_inputs(void) {
         if (controller->controllerData != NULL) {
             controller->rawStickX = controller->controllerData->stick_x;
             controller->rawStickY = controller->controllerData->stick_y;
+            controller->rawStick2X = controller->controllerData->right_stick_x;
+            controller->rawStick2Y = controller->controllerData->right_stick_y;
             controller->buttonPressed = controller->controllerData->button
                                         & (controller->controllerData->button ^ controller->buttonDown);
             // 0.5x A presses are a good meme
             controller->buttonDown = controller->controllerData->button;
+            if (controller->buttonPressed) {
+                CALL_EVENT(ButtonPressed, controller, controller->buttonPressed);
+            }
             adjust_analog_stick(controller);
         } else { // otherwise, if the controllerData is NULL, 0 out all of the inputs.
             controller->rawStickX = 0;
             controller->rawStickY = 0;
+            controller->rawStick2X = 0;
+            controller->rawStick2Y = 0;
             controller->buttonPressed = 0;
             controller->buttonDown = 0;
             controller->stickX = 0;
             controller->stickY = 0;
             controller->stickMag = 0;
+            controller->stick2X = 0;
+            controller->stick2Y = 0;
+            controller->stick2Mag = 0;
         }
     }
 
@@ -583,6 +616,11 @@ void read_controller_inputs(void) {
     gPlayer3Controller->stickX = gPlayer1Controller->stickX;
     gPlayer3Controller->stickY = gPlayer1Controller->stickY;
     gPlayer3Controller->stickMag = gPlayer1Controller->stickMag;
+    gPlayer3Controller->rawStick2X = gPlayer1Controller->rawStick2X;
+    gPlayer3Controller->rawStick2Y = gPlayer1Controller->rawStick2Y;
+    gPlayer3Controller->stick2X = gPlayer1Controller->stick2X;
+    gPlayer3Controller->stick2Y = gPlayer1Controller->stick2Y;
+    gPlayer3Controller->stick2Mag = gPlayer1Controller->stick2Mag;
     gPlayer3Controller->buttonPressed = gPlayer1Controller->buttonPressed;
     gPlayer3Controller->buttonDown = gPlayer1Controller->buttonDown;
 }
@@ -653,10 +691,9 @@ void setup_game_memory(void) {
  * Main game loop thread. Runs forever as long as the game continues.
  */
 
-static struct LevelCommand *addr;
+struct LevelCommand *addr;
 
 void thread5_game_loop(void) {
-
     setup_game_memory();
 #if ENABLE_RUMBLE
     // init_rumble_pak_scheduler_queue();
@@ -665,11 +702,12 @@ void thread5_game_loop(void) {
     save_file_load_all();
 
     // Point address to the entry point into the level script data.
-    addr = segmented_to_virtual(level_script_entry);
+    CALL_CANCELLABLE_EVENT(LevelScriptEntry, &addr) {
+        addr = segmented_to_virtual(level_script_entry);
+    }
 
     play_music(SEQ_PLAYER_SFX, SEQUENCE_ARGS(0, SEQ_SOUND_PLAYER), 0);
     set_sound_mode(save_file_get_sound_mode());
-    gGlobalTimer++;
 }
 
 void update_vblank_reset(void) {
@@ -695,7 +733,7 @@ void thread5_iteration(void){
 
     // If the reset timer is active, run the process to reset the game.
     if (gResetTimer != 0) {
-        draw_reset_bars();
+        // draw_reset_bars();
         return;
     }
     FrameInterpolation_StartRecord();
@@ -712,9 +750,21 @@ void thread5_iteration(void){
 
     audio_game_loop_tick();
     select_gfx_pool();
-    read_controller_inputs();
-    addr = level_script_execute(addr);
+    CALL_CANCELLABLE_EVENT(GameReadInput) {
+        read_controller_inputs();
+    }
+    mirror_mode_invert_input();
+    if (CVarGetInteger("gFrameAdvance", 0) == 1) {
+        bool shouldTick = CVarGetInteger("gFrameAdvanceTick", 0);
+        if (shouldTick) {
+            addr = level_script_execute(addr);
+            CVarSetInteger("gFrameAdvanceTick", 0);
+        }
+    } else {
+        addr = level_script_execute(addr);
+    }
 
+    CALL_EVENT(GameLoopTick);
     display_and_vsync();
 
     // when debug info is enabled, print the "BUF %d" information.

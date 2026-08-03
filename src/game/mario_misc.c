@@ -57,7 +57,7 @@ enum UnlockDoorStarStates {
  * The eye texture on succesive frames of Mario's blink animation.
  * He intentionally blinks twice each time.
  */
-static s8 gMarioBlinkAnimation[7] = { 1, 2, 1, 0, 1, 2, 1 };
+s8 gMarioBlinkAnimation[7] = { 1, 2, 1, 0, 1, 2, 1 };
 
 /**
  * The scale values per frame for Mario's foot/hand for his attack animation
@@ -67,7 +67,7 @@ static s8 gMarioBlinkAnimation[7] = { 1, 2, 1, 0, 1, 2, 1 };
  * All combined, this means e.g. the first animation scales Mario's fist by {2.4, 1.6, 1.2, 1.0} on
  * successive frames.
  */
-static s8 gMarioAttackScaleAnimation[3 * 6] = {
+s8 gMarioAttackScaleAnimation[3 * 6] = {
     10, 12, 16, 24, 10, 10, 10, 14, 20, 30, 10, 10, 10, 16, 20, 26, 26, 20,
 };
 
@@ -88,7 +88,7 @@ Gfx *geo_draw_mario_head_goddard(s32 callContext, struct GraphNode *node, Mat4 *
     s16 sfx = 0;
     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
     UNUSED Mat4 *transform = c;
-
+    FrameInterpolation_ShouldInterpolateFrame(false);
     if (callContext == GEO_CONTEXT_RENDER) {
         if (gPlayer1Controller->controllerData != NULL && !gWarpTransition.isActive) {
             gd_copy_p1_contpad(gPlayer1Controller->controllerData);
@@ -100,10 +100,11 @@ Gfx *geo_draw_mario_head_goddard(s32 callContext, struct GraphNode *node, Mat4 *
         FrameInterpolation_RecordCloseChild();
         play_menu_sounds(sfx);
     }
+    FrameInterpolation_ShouldInterpolateFrame(true);
     return gfx;
 }
 
-static void toad_message_faded(void) {
+void toad_message_faded(void) {
     if (gCurrentObject->oDistanceToMario > 700.0f) {
         gCurrentObject->oToadMessageRecentlyTalked = FALSE;
     }
@@ -112,7 +113,7 @@ static void toad_message_faded(void) {
     }
 }
 
-static void toad_message_opaque(void) {
+void toad_message_opaque(void) {
     if (gCurrentObject->oDistanceToMario > 700.0f) {
         gCurrentObject->oToadMessageState = TOAD_MESSAGE_FADING;
     } else if (!gCurrentObject->oToadMessageRecentlyTalked) {
@@ -125,7 +126,7 @@ static void toad_message_opaque(void) {
     }
 }
 
-static void toad_message_talking(void) {
+void toad_message_talking(void) {
     if (cur_obj_update_dialog_with_cutscene(MARIO_DIALOG_LOOK_DOWN,
         DIALOG_FLAG_TURN_TO_MARIO, CUTSCENE_DIALOG, gCurrentObject->oToadMessageDialogId)) {
         gCurrentObject->oToadMessageRecentlyTalked = TRUE;
@@ -147,13 +148,13 @@ static void toad_message_talking(void) {
     }
 }
 
-static void toad_message_opacifying(void) {
+void toad_message_opacifying(void) {
     if ((gCurrentObject->oOpacity += 6) == 255) {
         gCurrentObject->oToadMessageState = TOAD_MESSAGE_OPAQUE;
     }
 }
 
-static void toad_message_fading(void) {
+void toad_message_fading(void) {
     if ((gCurrentObject->oOpacity -= 6) == 81) {
         gCurrentObject->oToadMessageState = TOAD_MESSAGE_FADED;
     }
@@ -218,7 +219,7 @@ void bhv_toad_message_init(void) {
     }
 }
 
-static void star_door_unlock_spawn_particles(s16 angleOffset) {
+void star_door_unlock_spawn_particles(s16 angleOffset) {
     struct Object *sparkleParticle = spawn_object(gCurrentObject, 0, bhvSparkleSpawn);
 
     sparkleParticle->oPosX +=
@@ -301,7 +302,7 @@ void bhv_unlock_door_star_loop(void) {
 /**
  * Generate a display list that sets the correct blend mode and color for mirror Mario.
  */
-static Gfx *make_gfx_mario_alpha(struct GraphNodeGenerated *node, s16 alpha) {
+Gfx *make_gfx_mario_alpha(struct GraphNodeGenerated *node, s16 alpha) {
     Gfx *gfx;
     Gfx *gfxHead = NULL;
 
@@ -460,7 +461,7 @@ Gfx *geo_switch_mario_hand(s32 callContext, struct GraphNode *node, UNUSED Mat4 
  * (such as in the mirror room) results in a faster and desynced punch / kick animation.
  */
 Gfx *geo_mario_hand_foot_scaler(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
-    static s16 sMarioAttackAnimCounter = 0;
+    s16 sMarioAttackAnimCounter = 0;
     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
     struct GraphNodeScale *scaleNode = (struct GraphNodeScale *) node->next;
     struct MarioBodyState *bodyState = &gBodyStates[0];
@@ -648,4 +649,102 @@ Gfx *geo_mirror_mario_backface_culling(s32 callContext, struct GraphNode *node, 
         asGenerated->fnNode.node.flags = (asGenerated->fnNode.node.flags & 0xFF) | (LAYER_OPAQUE << 8);
     }
     return gfx;
+}
+
+// @port: We can make this dynamic like on coop
+#define PLAYER_PART_MAX 8
+
+struct PlayerColor {
+    Lights1 parts[PLAYER_PART_MAX];
+};
+
+u8 gDefaultMarioColors[][3] = { 
+    { 0x00, 0x00, 0xff },
+    { 0xff, 0x00, 0x00 },
+    { 0xff, 0xff, 0xff },
+    { 0x72, 0x1c, 0x0e },
+    { 0x73, 0x06, 0x00 },
+    { 0xfe, 0xc1, 0x79 },
+    { 0xff, 0x00, 0x00 },
+    { 0xff, 0x00, 0x00 }
+};
+
+struct PlayerColor geo_mario_get_player_color(const u8 (*palette)[3]) {
+    struct PlayerColor color = { 0 };
+    u8 index = 0;
+    struct MarioBodyState* bodyState = &gBodyStates[index];
+
+    u8 shadeR = 127;
+    u8 shadeG = 127;
+    u8 shadeB = 127;
+    u8 lightR = 127;
+    u8 lightG = 127;
+    u8 lightB = 127;
+    f32 lightingDirX = 0.0f;
+    f32 lightingDirY = 0.0f;
+    f32 lightingDirZ = 0.0f;
+
+    for (s32 part = 0; part != PLAYER_PART_MAX; ++part) {
+        color.parts[part] = (Lights1) gdSPDefLights1(
+            // Shadow
+            palette[part][0] * shadeR / 255.0f,
+            palette[part][1] * shadeG / 255.0f,
+            palette[part][2] * shadeB / 255.0f,
+            // Light
+            palette[part][0] * lightR / 255.0f,
+            palette[part][1] * lightG / 255.0f,
+            palette[part][2] * lightB / 255.0f,
+            0x28 + lightingDirX * 127.0f, 0x28 + lightingDirY * 127.0f, 0x28 + lightingDirZ * 127.0f
+        );
+    }
+    return color;
+}
+
+Gfx *geo_mario_create_player_colors_dl(s32 index, Gfx *capEnemyGfx, Gfx *capEnemyDecalGfx) {
+    s32 size = ((PLAYER_PART_MAX * 2) + 1) + (capEnemyGfx != NULL) + (capEnemyDecalGfx != NULL);
+    Gfx *gfx = alloc_display_list(size * sizeof(Gfx));
+    if (gfx) {
+        Gfx *gfxp = gfx;
+        struct PlayerColor playerColor;
+        playerColor = geo_mario_get_player_color(gDefaultMarioColors);
+        for (s32 part = 0; part != PLAYER_PART_MAX; ++part) {
+            Lights1 *light = alloc_display_list(sizeof(Lights1));
+            if (!light) { return NULL; }
+            *light = playerColor.parts[part];
+            gSPLight(gfxp++, &light->l, (2 * (part + 1)) + 1);
+            gSPLight(gfxp++, &light->a, (2 * (part + 1)) + 2);
+        }
+        if (capEnemyGfx) { gSPDisplayList(gfxp++, capEnemyGfx); }
+        if (capEnemyDecalGfx) { gSPDisplayList(gfxp++, capEnemyDecalGfx); }
+        gSPEndDisplayList(gfxp);
+    }
+    return gfx;
+}
+
+/**
+ * Generate DL that sets player color depending on player number.
+ */
+Gfx* geo_mario_set_player_colors(s32 callContext, struct GraphNode* node, UNUSED Mat4* c) {
+    struct GraphNodeGenerated* asGenerated = (struct GraphNodeGenerated*) node;
+    Gfx* gfx = NULL;
+    u8 index = 0;
+
+    struct MarioBodyState* bodyState = &gBodyStates[index];
+
+    if (callContext == GEO_CONTEXT_RENDER) {
+        gfx = geo_mario_create_player_colors_dl(index, NULL, NULL);
+        u32 layer = LAYER_OPAQUE;
+        if (asGenerated->parameter == 0) {
+            // put on transparent layer if vanish effect, opaque otherwise
+            layer = ((bodyState->modelState >> 8) & 1) ? LAYER_TRANSPARENT : LAYER_OPAQUE;
+        } else if (asGenerated->parameter == 1) {
+            layer = LAYER_OPAQUE;
+        } else if (asGenerated->parameter == 2) {
+            layer = LAYER_TRANSPARENT;
+        } else if (asGenerated->parameter >= 3) {
+            layer = asGenerated->parameter - 3;
+        }
+        asGenerated->fnNode.node.flags = (asGenerated->fnNode.node.flags & 0xFF) | (layer << 8);
+    }
+    return NULL;
 }

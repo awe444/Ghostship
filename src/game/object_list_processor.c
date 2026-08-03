@@ -490,6 +490,7 @@ void spawn_objects_from_info(UNUSED s32 unused, struct SpawnInfo *spawnInfo) {
 
             object->behavior = script;
             object->unused1 = 0;
+            object->modelId = spawnInfo->modelId;
 
             // Record death/collection in the SpawnInfo
             object->respawnInfoType = RESPAWN_INFO_TYPE_32;
@@ -602,7 +603,7 @@ void unload_deactivated_objects(void) {
 /**
  * Unused profiling function.
  */
-UNUSED static u16 unused_get_elapsed_time(u64 *cycleCounts, s32 index) {
+UNUSED u16 unused_get_elapsed_time(u64 *cycleCounts, s32 index) {
     u16 time;
     f64 cycles;
 

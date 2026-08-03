@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.16.0 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 
 # Set the project version and language
-project(Ghostship VERSION 1.0.1 LANGUAGES C CXX ASM)
+project(Ghostship VERSION 2.1.0 LANGUAGES C CXX ASM)
 include(FetchContent)
 
 include(cmake/ghostship-cvars.cmake)
@@ -20,7 +20,7 @@ math(EXPR PATCH_INDEX "${PROJECT_VERSION_PATCH}")
 # Use the patch number to select the correct word
 list(GET NATO_PHONETIC_ALPHABET ${PATCH_INDEX} PROJECT_PATCH_WORD)
 
-set(PROJECT_BUILD_NAME "Dutchman ${PROJECT_PATCH_WORD}" CACHE STRING "" FORCE)
+set(PROJECT_BUILD_NAME "Mary Celeste ${PROJECT_PATCH_WORD}" CACHE STRING "" FORCE)
 set(PROJECT_TEAM "Lywx" CACHE STRING "" FORCE)
 
 # Get Git Information
@@ -81,7 +81,10 @@ include(cmake/automate-vcpkg.cmake)
 set(VCPKG_TRIPLET x64-windows-static)
 set(VCPKG_TARGET_TRIPLET x64-windows-static)
 vcpkg_bootstrap()
-vcpkg_install_packages(zlib bzip2 libzip libpng sdl2 glew glfw3 nlohmann-json tinyxml2 spdlog)
+vcpkg_install_packages(zlib bzip2 libzip libpng sdl2[vulkan] glew glfw3 nlohmann-json tinyxml2 spdlog mbedtls)
+
+add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -94,13 +97,31 @@ set(CPP "${CMAKE_C_COMPILER}" "-E" "-P" "-Wno-trigraphs" "-x" "c")
 endif()
 
 if(IOS)
-    set(PLATFORM "OS64")
+    if(NOT DEFINED PLATFORM)
+        set(PLATFORM "OS64")
+    endif()
+    option(IOS_SIGNING "Code sign the iOS app (OFF produces an unsigned bundle for sideloading)" ON)
     include(cmake/ios.toolchain.cmake)
     add_compile_definitions(
         PLATFORM_IOS=1
+        __IOS__
     )
-    set(CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "YOUR_TEAM_ID")
+    if(IOS_SIGNING)
+        set(CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "YOUR_TEAM_ID")
+    endif()
+    set(BUNDLE_ID "dev.net64.ghostship")
+    set(SIGN_LIBRARY ON)
     set(PROJECT_ID "${BUNDLE_ID}")
+endif()
+
+if(EMSCRIPTEN)
+    add_compile_definitions(USE_OPENGLES=1)
+    add_compile_options(-pthread -sUSE_SDL=2 -fexceptions)
+    add_link_options(-pthread -sUSE_SDL=2)
+endif()
+
+if(ANDROID)
+    add_compile_definitions(USE_OPENGLES=1)
 endif()
 
 ################################################################################
@@ -131,20 +152,50 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 ################################################################################
 # Global configuration types
 ################################################################################
-if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
 set(CMAKE_C_FLAGS_DEBUG "-g -ffast-math -DDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -ffast-math -DDEBUG")
-set(CMAKE_C_FLAGS_RELEASE "-O3 -ffast-math -DNDEBUG")
+# Optimization level -O2 and higher cause graphical 3D glitches due to undefined behavior in some of the C code (on both PC and Switch).
+# The optimization that causes this issue is -fstrict-aliasing. The camera is locked in place, often out-of-bounds, and renders the game unplayable.
+set(CMAKE_C_FLAGS_RELEASE "-O3 -fno-strict-aliasing -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -ffast-math -DNDEBUG")
+add_compile_definitions(
+    _LARGEFILE64_SOURCE=1
+    _POSIX_C_SOURCE=200809L
+)
 else()
-set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
-set(CMAKE_OBJCXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+set(CMAKE_C_FLAGS_RELEASE "-O1 -fno-strict-aliasing -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O1 -DNDEBUG")
+set(CMAKE_OBJCXX_FLAGS_RELEASE "-O1 -DNDEBUG")
 endif()
 
 # Set game compilation version
 set(VERSION us)
-set(USE_NETWORKING OFF)
+
+option(USE_SATELLA "Connect to Satella at startup for mod signing and online relay features" ON)
+
+if(NOT USE_SATELLA)
+    message(WARNING
+        "\n"
+        "  USE_SATELLA is OFF — Satella relay connection disabled.\n"
+        "  The following features will NOT work:\n"
+        "    * Mod signature verification (public keys are fetched from Satella)\n"
+        "    * Online / relay features in mods (Relay API becomes a no-op)\n"
+        "  Mods that depend on networking will fail silently at runtime.\n"
+    )
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" OR CMAKE_SYSTEM_NAME STREQUAL "CafeOS" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR EMSCRIPTEN OR NOT USE_SATELLA)
+    set(USE_NETWORKING_DEFAULT OFF)
+else()
+    set(USE_NETWORKING_DEFAULT ON)
+endif()
+option(USE_NETWORKING "Enable the Satella online relay / networking features" ${USE_NETWORKING_DEFAULT})
+
+if(NOT USE_SATELLA AND USE_NETWORKING)
+    set(USE_NETWORKING OFF CACHE BOOL "Disabled because USE_SATELLA=OFF" FORCE)
+endif()
+
 set(SKIP_XCODE_VERSION_CHECK ON)
 
 # Add compile definitions for the target
@@ -156,11 +207,12 @@ add_compile_definitions(
     GBI_FLOATS=1
     _LANGUAGE_C
     _USE_MATH_DEFINES
-    CIMGUI_DEFINE_ENUMS_AND_STRUCTS
-    IMGUI_DEFINE_MATH_OPERATORS
     AVOID_UB=1
-    ENABLE_OPENGL=1
 )
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_compile_definitions(ENABLE_OPENGL=1)
+endif()
 
 # Find necessary libraries
 if (UNIX AND NOT APPLE AND NOT ANDROID)
@@ -169,7 +221,15 @@ endif()
 
 configure_file( ${CMAKE_CURRENT_SOURCE_DIR}/properties.h.in ${CMAKE_CURRENT_SOURCE_DIR}/properties.h @ONLY)
 
-# Include directories are set per-target to avoid leaking into dependencies.
+# Include directories
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/include
+    ${DIRECTORIES_TO_INCLUDE}
+)
 
 # Collect source files to build the executable
 file(GLOB_RECURSE ALL_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
@@ -189,6 +249,7 @@ file(GLOB_RECURSE ALL_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
     "lib/src/guScaleF.c"
     "lib/src/guLookAtF.c"
     "lib/src/guTranslateF.c"
+    "lib/src/osAiSetFrequency.c"
     "include/**/*"
     "sound/*.c"
     "src/audio/*.h"
@@ -215,6 +276,14 @@ file(GLOB_RECURSE ALL_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
     "src/port/Enhancements/game-interactor/*.cpp"
     "src/port/importer/*.cpp"
     "src/port/importer/types/*.cpp"
+    "src/port/mods/*.h"
+    "src/port/mods/*.cpp"
+    "src/port/mods/mirror/*.h"
+    "src/port/mods/mirror/*.cpp"
+    "src/port/net/*.h"
+    "src/port/net/*.cpp"
+    "src/port/web/*.h"
+    "src/port/web/*.cpp"
     "text/*.c"
     "textures/*.h"
     "textures/*.c"
@@ -250,11 +319,85 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${IOS_DIR}/plist.in
         RESOURCE "${IMAGE_FILES};${STORYBOARD_FILE};${ICON_FILES}"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BUNDLE_ID}"
     )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+
+    if(IOS_SIGNING)
+        set_target_properties(
+            ${PROJECT_NAME}
+            PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "YES"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "YES"
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+        )
+    else()
+        set_target_properties(
+            ${PROJECT_NAME}
+            PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
+        )
+    endif()
+
+    if(EXISTS ${CMAKE_SOURCE_DIR}/ghostship.o2r)
+        add_custom_command(
+            TARGET ${PROJECT_NAME} POST_BUILD
+            COMMENT "Bundling ghostship.o2r..."
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/ghostship.o2r"
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/ghostship.o2r"
+        )
+    else()
+        message(WARNING "ghostship.o2r not found in the source tree; generate it (GeneratePortO2R) and rebuild so it gets bundled into the iOS app.")
+    endif()
+elseif(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${ALL_FILES})
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "main")
 else()
     add_executable(${PROJECT_NAME} ${ALL_FILES})
+endif()
+
+if(EMSCRIPTEN)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "ghostship" SUFFIX ".html")
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -sUSE_SDL=2
+        -sUSE_WEBGL2=1
+        -sMAX_WEBGL_VERSION=2
+        -sMIN_WEBGL_VERSION=2
+        -sFULL_ES3=1
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=1
+        -sEXIT_RUNTIME=1
+        -sSTACK_SIZE=5242880
+        -sPTHREAD_POOL_SIZE=8
+        -sASYNCIFY=1
+        -sASSERTIONS=1
+        -sASYNCIFY_STACK_SIZE=8388608
+        -sFORCE_FILESYSTEM=1
+        -sEXPORTED_FUNCTIONS=_main,_malloc,_free
+        -sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,UTF8ToString,stringToUTF8
+        -lembind
+        -lidbfs.js
+        "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/src/port/web/shell.html"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/assets@/assets"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/config.yml@/config.yml"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/ghostship.o2r@/ghostship.o2r"
+    )
+    set(GHOSTSHIP_WEB_PRELOAD_ROM "" CACHE FILEPATH "Path to an sm64.o2r to embed (debug only)")
+    if(GHOSTSHIP_WEB_PRELOAD_ROM)
+        target_link_options(${PROJECT_NAME} PRIVATE
+            "SHELL:--preload-file ${GHOSTSHIP_WEB_PRELOAD_ROM}@/sm64.o2r")
+    endif()
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/port/web/shell.html")
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/src/port/web/coi-serviceworker.js"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/coi-serviceworker.js"
+    )
 endif()
 
 ################################################################################
@@ -288,28 +431,165 @@ if (MSVC)
   endif()
 endif()
 
+FetchContent_Declare(
+    dr_libs
+    GIT_REPOSITORY https://github.com/mackron/dr_libs.git
+    GIT_TAG da35f9d6c7374a95353fd1df1d394d44ab66cf01
+)
+FetchContent_MakeAvailable(dr_libs)
+
 #==============================================================================#
 # Libultraship Integration                                                     #
 #==============================================================================#
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Android")
-    set(SHIP_ANDROID_JNI_CLASS "com_ghostship_android_MainActivity" CACHE STRING
-        "JNI-mangled class name for libultraship Android native methods")
+# Removes MPQ/OTR support
+set(EXCLUDE_MPQ_SUPPORT TRUE CACHE BOOL "")
+set(ENABLE_EXP_AUTO_CONFIGURE_CONTROLLERS ON CACHE BOOL "")
+add_compile_definitions(EXCLUDE_MPQ_SUPPORT)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    find_package(SDL2)
 endif()
 
+include_directories(
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include/libultraship
+  ${SDL2_INCLUDE_DIRS}
+  ${GLEW_INCLUDE_DIRS}
+  ${dr_libs_SOURCE_DIR}
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
+    set(ENABLE_SCRIPTING OFF CACHE BOOL "" FORCE)
+    set(DISABLE_DLL_LOADER ON CACHE BOOL "" FORCE)
+elseif(EMSCRIPTEN)
+    set(ENABLE_SCRIPTING OFF CACHE BOOL "" FORCE)
+    set(DISABLE_DLL_LOADER ON CACHE BOOL "" FORCE)
+
+    set(tinyxml2_BUILD_TESTING OFF)
+    FetchContent_Declare(
+        tinyxml2
+        GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
+        GIT_TAG 10.0.0
+        GIT_SHALLOW TRUE
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.12.0
+        GIT_SHALLOW TRUE
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG v1.16.0
+        GIT_SHALLOW TRUE
+        OVERRIDE_FIND_PACKAGE
+    )
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    set(BUILD_TOOLS OFF)
+    set(BUILD_REGRESS OFF)
+    set(BUILD_EXAMPLES OFF)
+    set(BUILD_DOC OFF)
+    set(BUILD_OSSFUZZ OFF)
+    set(BUILD_SHARED_LIBS OFF)
+    file(REMOVE
+        "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/zlib-config.cmake"
+        "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/zlib-config-version.cmake"
+        "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/zlibConfig.cmake"
+        "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/zlibConfigVersion.cmake")
+    set(_emsysroot "${EMSCRIPTEN_SYSROOT}")
+    if(NOT _emsysroot)
+        set(_emsysroot "${CMAKE_SYSROOT}")
+    endif()
+    if(NOT _emsysroot)
+        message(FATAL_ERROR "Could not determine the Emscripten sysroot for zlib")
+    endif()
+    set(ZLIB_INCLUDE_DIR "${_emsysroot}/include" CACHE PATH "" FORCE)
+    set(ZLIB_LIBRARY "${_emsysroot}/lib/wasm32-emscripten/libz.a" CACHE FILEPATH "" FORCE)
+    set(ENABLE_BZIP2 OFF)
+    set(ENABLE_LZMA OFF)
+    set(ENABLE_ZSTD OFF)
+    FetchContent_Declare(
+        libzip
+        GIT_REPOSITORY https://github.com/nih-at/libzip.git
+        GIT_TAG v1.11.4
+        GIT_SHALLOW TRUE
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_MakeAvailable(tinyxml2 nlohmann_json spdlog libzip)
+    # zip.h/zipconf.h for libultraship headers included by game code.
+    target_include_directories(${PROJECT_NAME} PRIVATE ${libzip_SOURCE_DIR}/lib ${libzip_BINARY_DIR})
+elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    set(ENABLE_SCRIPTING ON CACHE BOOL "" FORCE)
+else()
+    #=================== tinyxml2 ===================
+    # devkitPro portlibs may have tinyxml2 headers/lib but no CMake config that
+    # exports tinyxml2::tinyxml2. Always fetch from source so both this project
+    # and libultraship's find_package(tinyxml2 REQUIRED) get a proper target.
+    set(tinyxml2_BUILD_TESTING OFF)
+    FetchContent_Declare(
+        tinyxml2
+        GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
+        GIT_TAG 10.0.0
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_MakeAvailable(tinyxml2)
+endif()
 add_subdirectory(libultraship ${CMAKE_CURRENT_SOURCE_DIR}/libultraship)
 add_dependencies(${PROJECT_NAME} libultraship)
-target_link_libraries(${PROJECT_NAME} PRIVATE libultraship)
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}/include
-    ${DIRECTORIES_TO_INCLUDE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include/libultraship
+if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    target_link_libraries(${PROJECT_NAME} PRIVATE libultraship)
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,libultraship>")
+endif()
+
+if(ANDROID)
+    FetchContent_GetProperties(libzip)
+    if(libzip_SOURCE_DIR)
+        target_include_directories(${PROJECT_NAME} PRIVATE ${libzip_SOURCE_DIR}/lib ${libzip_BINARY_DIR})
+    endif()
+    target_link_libraries(${PROJECT_NAME} PRIVATE libzip::zip GLESv3 EGL android log)
+endif()
+
+set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS TRUE)
+set_target_properties(${PROJECT_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+
+#=================== cimgui ===================
+FetchContent_Declare(
+    cimgui
+    GIT_REPOSITORY https://github.com/cimgui/cimgui.git
+    GIT_TAG        1.91.9bdock
+    GIT_SUBMODULES ""
 )
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+FetchContent_Populate(cimgui)
+FetchContent_GetProperties(ImGui)
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_deps")
+file(CREATE_LINK "${imgui_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/_deps/imgui" SYMBOLIC)
+
+add_library(cimgui STATIC ${cimgui_SOURCE_DIR}/cimgui.cpp)
+
+target_include_directories(cimgui
+    PRIVATE "${CMAKE_BINARY_DIR}/_deps"
+    PUBLIC  "${cimgui_SOURCE_DIR}"
+)
+
+target_compile_definitions(cimgui
+    INTERFACE CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+)
+
+target_link_libraries(cimgui PUBLIC ImGui)
+if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    target_link_libraries(${PROJECT_NAME} PRIVATE cimgui)
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,cimgui>")
+endif()
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL "iOS")
     get_property(IOS_TOOLCHAIN_FILE GLOBAL PROPERTY IOS_TOOLCHAIN_FILE)
@@ -368,17 +648,7 @@ endif()
 
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	set(ADDITIONAL_LIBRARY_DEPENDENCIES
-        "$<$<BOOL:${USE_NETWORKING}>:SDL2_net::SDL2_net-static>"
-    )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
-    set(THREADS_PREFER_PTHREAD_FLAG ON)
-    find_package(Threads REQUIRED)
-
-    set(ADDITIONAL_LIBRARY_DEPENDENCIES
-        SDL2::SDL2
-        Threads::Threads
-    )
+	set(ADDITIONAL_LIBRARY_DEPENDENCIES)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
     find_package(SDL2)
     set(ADDITIONAL_LIBRARY_DEPENDENCIES
@@ -393,34 +663,27 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
         ${DEVKITPRO}/portlibs/wiiu/include/
     )
 else()
- 	set(ADDITIONAL_LIBRARY_DEPENDENCIES
-        "$<$<BOOL:${USE_NETWORKING}>:SDL2_net::SDL2_net>"
-	)
+ 	set(ADDITIONAL_LIBRARY_DEPENDENCIES)
 endif()
 
-if(USE_NETWORKING)
-    if(MSVC)
-        vcpkg_install_packages(sdl2-net)
-    endif()
-    find_package(SDL2_net REQUIRED)
-    include_directories(${SDL2_NET_INCLUDE_DIRS})
-    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2_net::SDL2_net)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_NETWORKING)
+if(USE_NETWORKING AND NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
+    FetchContent_Declare(
+        ixwebsocket
+        GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
+        GIT_TAG        v11.4.5
+    )
+    set(USE_TLS ON CACHE BOOL "" FORCE)
+    set(USE_MBED_TLS ON CACHE BOOL "" FORCE)
+    set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(ixwebsocket)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ixwebsocket)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        USE_NETWORKING
+        GHOSTSHIP_VERSION="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+    )
 endif()
-
-option(USE_STANDALONE "Build as a standalone executable" OFF)
-option(BUILD_STORMLIB "Build with StormLib support" OFF)
-
-option(BUILD_SM64 "Build with Super Mario 64 support" ON)
-option(BUILD_MK64 "Build with Mario Kart 64 support" OFF)
-option(BUILD_SF64 "Build with Star Fox 64 support" OFF)
-option(BUILD_FZERO "Build with F-Zero X support" OFF)
-option(BUILD_MARIO_ARTIST "Build with Mario Artist support" OFF)
-add_subdirectory(Torch)
-target_link_libraries(${PROJECT_NAME} PRIVATE torch "${ADDITIONAL_LIBRARY_DEPENDENCIES}")
 
 if(CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch")
-
 nx_generate_nacp(${PROJECT_NAME}.nacp
    NAME "${PROJECT_NAME}"
    AUTHOR "${PROJECT_TEAM}"
@@ -433,81 +696,62 @@ nx_create_nro(${PROJECT_NAME}
 )
 
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.nro DESTINATION . COMPONENT ${PROJECT_NAME})
+else()
+option(USE_STANDALONE "Build as a standalone executable" OFF)
+option(BUILD_STORMLIB "Build with StormLib support" OFF)
+
+option(BUILD_SM64 "Build with Super Mario 64 support" ON)
+option(BUILD_MK64 "Build with Mario Kart 64 support" OFF)
+option(BUILD_SF64 "Build with Star Fox 64 support" OFF)
+option(BUILD_FZERO "Build with F-Zero X support" OFF)
+option(BUILD_MARIO_ARTIST "Build with Mario Artist support" OFF)
+add_subdirectory(Torch)
+list(APPEND ADDITIONAL_LIBRARY_DEPENDENCIES torch)
 endif()
 
+target_link_libraries(${PROJECT_NAME} PRIVATE "${ADDITIONAL_LIBRARY_DEPENDENCIES}")
 ################################################################################
 # Compile and link options
 ################################################################################
 if(MSVC)
-  if("${CMAKE_VS_PLATFORM_NAME}" STREQUAL "x64")
-      target_compile_options(${PROJECT_NAME} PRIVATE
-          $<$<CONFIG:Debug>:
-              /w;
-              /Od;
-              /MTd
-          >
-          $<$<CONFIG:Release>:
-              /Oi;
-              /Gy;
-              /W3;
-              /MT
-          >
-          /permissive-;
-          /MP;
-          ${DEFAULT_CXX_DEBUG_INFORMATION_FORMAT};
-          ${DEFAULT_CXX_EXCEPTION_HANDLING}
-      )
-      target_compile_options(${PROJECT_NAME} PRIVATE  $<$<CONFIG:Debug>:/ZI;>)
-      target_compile_options(${PROJECT_NAME} PRIVATE  $<$<CONFIG:Release>:/Zi;>)
-  elseif("${CMAKE_VS_PLATFORM_NAME}" STREQUAL "Win32")
-      target_compile_options(${PROJECT_NAME} PRIVATE
-          $<$<CONFIG:Debug>:
-              /MTd
-          >
-          $<$<CONFIG:Release>:
-              /O2;
-              /Oi;
-              /Gy;
-              /MT
-          >
-          /permissive-;
-          /MP;
-          /w;
-          ${DEFAULT_CXX_DEBUG_INFORMATION_FORMAT};
-          ${DEFAULT_CXX_EXCEPTION_HANDLING}
-      )
-  endif()
-  if("${CMAKE_VS_PLATFORM_NAME}" STREQUAL "x64")
-      target_link_options(${PROJECT_NAME} PRIVATE
-          $<$<CONFIG:Debug>:
-              /INCREMENTAL
-          >
-          $<$<CONFIG:Release>:
-              /OPT:REF;
-              /OPT:ICF;
-              /INCREMENTAL:NO;
-              /FORCE:MULTIPLE
-          >
-          /MANIFEST:NO;
-          /DEBUG;
-          /SUBSYSTEM:WINDOWS
-      )
-  elseif("${CMAKE_VS_PLATFORM_NAME}" STREQUAL "Win32")
-      target_link_options(${PROJECT_NAME} PRIVATE
-          $<$<CONFIG:Debug>:
-              /STACK:8777216
-          >
-          $<$<CONFIG:Release>:
-              /OPT:REF;
-              /OPT:ICF;
-              /INCREMENTAL:NO;
-              /FORCE:MULTIPLE
-          >
-          /MANIFEST:NO;
-          /DEBUG;
-          /SUBSYSTEM:WINDOWS
-      )
-  endif()
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Debug>:
+            /w;
+            /Od
+        >
+        $<$<CONFIG:Release>:
+            /Oi;
+            /Gy;
+            /W3
+        >
+
+        /wd4024 #different types for formal and actual parameter [x]. Usually seen along side 4047.
+        /wd4047 #'uintptr_t' differs in levels of indirection from 'Gfx *'. Usually caused by passing a uintptr_t into a function expecting a pointer-types
+        /wd4090 #'initializing': different 'const' qualifiers. Caused when initializing a non const struct member with a const char*.		
+        /wd4101 # unreferenced local variable. Things like stack pads.
+        /wd4133 #incompatible types. Usually caused by passing a c string into a function that takes a pointer.
+        /wd4244 #conversion from [a] to [b]. Used to warn when copying to smaller type without a cast.
+        /sdl-;
+        /permissive-;
+        /MP;
+        ${DEFAULT_CXX_DEBUG_INFORMATION_FORMAT};
+        ${DEFAULT_CXX_EXCEPTION_HANDLING}
+    )
+  target_compile_options(${PROJECT_NAME} PRIVATE  $<$<CONFIG:Debug>:/ZI;>)
+  target_link_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Debug>:
+            /INCREMENTAL
+        >
+        $<$<CONFIG:Release>:
+            /OPT:REF;
+            /OPT:ICF;
+            /INCREMENTAL:NO;
+            /FORCE:MULTIPLE
+        >
+        /MANIFEST:NO;
+        /DEBUG;
+        /SUBSYSTEM:WINDOWS
+    )
 
   # Remove /RTC from msvc flags
   foreach (fentry
@@ -519,7 +763,7 @@ if(MSVC)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-    if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
         target_compile_options(${PROJECT_NAME} PRIVATE
             -Wall -Wextra -Wno-error
             -Wno-return-type
@@ -560,7 +804,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
           -Wno-missing-braces
           -Wno-int-conversion
           $<$<COMPILE_LANGUAGE:C>:
-              -Werror-implicit-function-declaration
+              -Wno-implicit-function-declaration
               -Wno-incompatible-pointer-types
               -fpermissive
           >
@@ -593,28 +837,6 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
               -Wno-builtin-declaration-mismatch
               -Wno-switch-unreachable
               -Wno-stringop-overflow
-          >
-      )
-  elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
-      target_compile_options(${PROJECT_NAME} PRIVATE
-          -O2
-
-          -Wno-error
-          -Wno-format-security
-          -Wno-multichar
-          -Wno-return-type
-          -Wno-narrowing
-          -Wno-switch-outside-range
-          $<$<COMPILE_LANGUAGE:C>:
-              -Werror-implicit-function-declaration
-              -Wno-incompatible-pointer-types
-              -Wno-discarded-array-qualifiers
-              -Wno-discarded-qualifiers
-              -Wno-int-conversion
-              -Wno-builtin-declaration-mismatch
-              -Wno-switch-unreachable
-              -Wno-stringop-overflow
-              -Wno-implicit-int
           >
       )
   else()
@@ -652,14 +874,45 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   endif()
 endif()
 
+if(NOT ANDROID)
 add_custom_command(
 	TARGET ${PROJECT_NAME} POST_BUILD
 	COMMENT "Copying asset yamls..."
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/config.yml" "$<TARGET_FILE_DIR:Ghostship>/config.yml"
 	COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/" "$<TARGET_FILE_DIR:Ghostship>/assets/"
 )
+endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+include(${CMAKE_CURRENT_SOURCE_DIR}/libultraship/cmake/SetupTccRuntime.cmake)
+
+set(PROPERTY_READER_GUARD_DISABLED TRUE)
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    lus_setup_tcc_runtime(${PROJECT_NAME} RESOURCES_DIR "../Resources/.tcc")
+else()
+    lus_setup_tcc_runtime(${PROJECT_NAME})
+endif()
+unset(PROPERTY_READER_GUARD_DISABLED)
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_RUNTIME_DLLS:${PROJECT_NAME}>"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    COMMAND_EXPAND_LISTS
+    COMMENT "Copying runtime DLL dependencies next to ${PROJECT_NAME}.exe..."
+  )
+  find_file(GHOSTSHIP_SHADERC_DLL NAMES shaderc_shared.dll
+            HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+  if (GHOSTSHIP_SHADERC_DLL)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${GHOSTSHIP_SHADERC_DLL}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+      COMMENT "Copying shaderc_shared.dll next to ${PROJECT_NAME}.exe..."
+    )
+  endif()
+endif()
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch" AND NOT ANDROID)
 include(ExternalProject)
 ExternalProject_Add(TorchExternal
 	PREFIX TorchExternal
@@ -667,8 +920,9 @@ ExternalProject_Add(TorchExternal
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Torch
 )
 ExternalProject_Get_Property(TorchExternal install_dir)
-if (MSVC)
-  set(TORCH_EXECUTABLE ${install_dir}/src/TorchExternal-build/$<CONFIGURATION>/torch)
+get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (_is_multi_config)
+  set(TORCH_EXECUTABLE ${install_dir}/src/TorchExternal-build/$<CONFIG>/torch)
 else()
   set(TORCH_EXECUTABLE ${install_dir}/src/TorchExternal-build/torch)
 endif()
@@ -676,7 +930,7 @@ add_custom_target(
     ExtractAssets
     DEPENDS TorchExternal
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMAND ${TORCH_EXECUTABLE} o2r baserom.us.z64
+    COMMAND ${TORCH_EXECUTABLE} o2r baserom.us.z64 -u ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/sm64.o2r" "${CMAKE_BINARY_DIR}/sm64.o2r"
 )
 
@@ -684,7 +938,7 @@ add_custom_target(
     GeneratePortO2R
     DEPENDS TorchExternal
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMAND ${TORCH_EXECUTABLE} pack port ghostship.o2r o2r
+    COMMAND ${TORCH_EXECUTABLE} pack port ghostship.o2r o2r -u ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/ghostship.o2r" "${CMAKE_BINARY_DIR}/ghostship.o2r"
 )
 
@@ -695,6 +949,12 @@ if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
   install(FILES "${CMAKE_BINARY_DIR}/ghostship.o2r" DESTINATION . COMPONENT ${PROJECT_NAME})
   install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/" DESTINATION ./assets COMPONENT ${PROJECT_NAME})
   install(FILES "${CMAKE_BINARY_DIR}/config.yml" DESTINATION . COMPONENT ${PROJECT_NAME})
+endif()
+
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
+  install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION ./debug COMPONENT ${PROJECT_NAME})
+  install(FILES "${CMAKE_BINARY_DIR}/ghostship.o2r" DESTINATION . COMPONENT ${PROJECT_NAME})
+  install(FILES "$<TARGET_RUNTIME_DLLS:${PROJECT_NAME}>" DESTINATION . COMPONENT ${PROJECT_NAME})
 endif()
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -717,6 +977,9 @@ add_custom_target(CreateOSXIcons
     add_dependencies(${PROJECT_NAME} CreateOSXIcons)
     configure_file("${CMAKE_SOURCE_DIR}/Info.plist" "${CMAKE_BINARY_DIR}/Info.plist" COPYONLY)
 INSTALL(TARGETS ${PROJECT_NAME} DESTINATION ../MacOS COMPONENT Ghostship)
+if(ENABLE_SCRIPTING)
+    INSTALL(FILES "$<TARGET_FILE:libtcc>" DESTINATION ../MacOS COMPONENT Ghostship)
+endif()
 INSTALL(FILES ${CMAKE_BINARY_DIR}/gamecontrollerdb.txt DESTINATION ../MacOS COMPONENT Ghostship)
 INSTALL(FILES ${CMAKE_BINARY_DIR}/ghostship.o2r DESTINATION ../Resources COMPONENT Ghostship)
 INSTALL(FILES ${CMAKE_BINARY_DIR}/config.yml DESTINATION ../Resources COMPONENT Ghostship)

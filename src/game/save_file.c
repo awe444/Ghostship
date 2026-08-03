@@ -11,11 +11,16 @@
 #include "level_table.h"
 #include "course_table.h"
 #include "rumble_init.h"
+#include "port/data/Saves.h"
+
+#include "port/events/list/PlayerEvent.h"
+#include "port/mods/PortEnhancements.h"
 
 #define MENU_DATA_MAGIC 0x4849
 #define SAVE_FILE_MAGIC 0x4441
 
-STATIC_ASSERT(sizeof(struct SaveBuffer) == EEPROM_SIZE, "eeprom buffer size must match");
+// @port: Disabled because save files are gonna be bigger soon
+// STATIC_ASSERT(sizeof(struct SaveBuffer) == EEPROM_SIZE, "eeprom buffer size must match");
 
 extern struct SaveBuffer gSaveBuffer;
 
@@ -46,7 +51,7 @@ STATIC_ASSERT(ARRAY_COUNT(gLevelToCourseNumTable) == LEVEL_COUNT - 1,
 
 // This was probably used to set progress to 100% for debugging, but
 // it was removed from the release ROM.
-static void stub_save_file_1(void) {
+void stub_save_file_1(void) {
     UNUSED u8 filler[4];
 }
 
@@ -56,7 +61,7 @@ static void stub_save_file_1(void) {
  * Try at most 4 times, and return 0 on success. On failure, return the status returned from
  * osEepromLongRead. It also returns 0 if EEPROM isn't loaded correctly in the system.
  */
-static s32 read_eeprom_data(void *buffer, s32 size) {
+s32 read_eeprom_data(void *buffer, s32 size) {
     s32 status = 0;
 
     if (gEepromProbe != 0) {
@@ -84,7 +89,7 @@ static s32 read_eeprom_data(void *buffer, s32 size) {
  * Try at most 4 times, and return 0 on success. On failure, return the status returned from
  * osEepromLongWrite. Unlike read_eeprom_data, return 1 if EEPROM isn't loaded.
  */
-static s32 write_eeprom_data(void *buffer, s32 size) {
+s32 write_eeprom_data(void *buffer, s32 size) {
     s32 status = 1;
 
     if (gEepromProbe != 0) {
@@ -110,7 +115,7 @@ static s32 write_eeprom_data(void *buffer, s32 size) {
  * Sum the bytes in data to data + size - 2. The last two bytes are ignored
  * because that is where the checksum is stored.
  */
-static u16 calc_checksum(u8 *data, s32 size) {
+u16 calc_checksum(u8 *data, s32 size) {
     u16 chksum = 0;
 
     while (size-- > 2) {
@@ -122,7 +127,7 @@ static u16 calc_checksum(u8 *data, s32 size) {
 /**
  * Verify the signature at the end of the block to check if the data is valid.
  */
-static s32 verify_save_block_signature(void *buffer, s32 size, u16 magic) {
+s32 verify_save_block_signature(void *buffer, s32 size, u16 magic) {
     struct SaveBlockSignature *sig = (struct SaveBlockSignature *) ((size - 4) + (u8 *) buffer);
 
     if (sig->magic != magic) {
@@ -137,7 +142,7 @@ static s32 verify_save_block_signature(void *buffer, s32 size, u16 magic) {
 /**
  * Write a signature at the end of the block to make sure the data is valid
  */
-static void add_save_block_signature(void *buffer, s32 size, u16 magic) {
+void add_save_block_signature(void *buffer, s32 size, u16 magic) {
     struct SaveBlockSignature *sig = (struct SaveBlockSignature *) ((size - 4) + (u8 *) buffer);
 
     sig->magic = magic;
@@ -147,7 +152,9 @@ static void add_save_block_signature(void *buffer, s32 size, u16 magic) {
 /**
  * Copy main menu data from one backup slot to the other slot.
  */
-static void restore_main_menu_data(s32 srcSlot) {
+void restore_main_menu_data(s32 srcSlot) {
+    CALL(RestoreMainMenuData, srcSlot);
+
     s32 destSlot = srcSlot ^ 1;
 
     // Compute checksum on source data
@@ -160,7 +167,9 @@ static void restore_main_menu_data(s32 srcSlot) {
     write_eeprom_data(&gSaveBuffer.menuData[destSlot], sizeof(gSaveBuffer.menuData[destSlot]));
 }
 
-static void save_main_menu_data(void) {
+void save_main_menu_data(void) {
+    CALL(SaveMainMenuData);
+
     if (gMainMenuDataModified) {
         // Compute checksum
         add_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
@@ -175,7 +184,7 @@ static void save_main_menu_data(void) {
     }
 }
 
-static void wipe_main_menu_data(void) {
+void wipe_main_menu_data(void) {
     bzero(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]));
 
     // Set score ages for all courses to 3, 2, 1, and 0, respectively.
@@ -187,11 +196,11 @@ static void wipe_main_menu_data(void) {
     save_main_menu_data();
 }
 
-static s32 get_coin_score_age(s32 fileIndex, s32 courseIndex) {
+s32 get_coin_score_age(s32 fileIndex, s32 courseIndex) {
     return (gSaveBuffer.menuData[0].coinScoreAges[fileIndex] >> (2 * courseIndex)) & 0x3;
 }
 
-static void set_coin_score_age(s32 fileIndex, s32 courseIndex, s32 age) {
+void set_coin_score_age(s32 fileIndex, s32 courseIndex, s32 age) {
     s32 mask = 0x3 << (2 * courseIndex);
 
     gSaveBuffer.menuData[0].coinScoreAges[fileIndex] &= ~mask;
@@ -201,7 +210,7 @@ static void set_coin_score_age(s32 fileIndex, s32 courseIndex, s32 age) {
 /**
  * Mark a coin score for a save file as the newest out of all save files.
  */
-static void touch_coin_score_age(s32 fileIndex, s32 courseIndex) {
+void touch_coin_score_age(s32 fileIndex, s32 courseIndex) {
     s32 i;
     u32 age;
     u32 currentAge = get_coin_score_age(fileIndex, courseIndex);
@@ -222,7 +231,7 @@ static void touch_coin_score_age(s32 fileIndex, s32 courseIndex) {
 /**
  * Mark all coin scores for a save file as new.
  */
-static void touch_high_score_ages(s32 fileIndex) {
+void touch_high_score_ages(s32 fileIndex) {
     s32 i;
 
     for (i = COURSE_NUM_TO_INDEX(COURSE_MIN); i <= COURSE_NUM_TO_INDEX(COURSE_STAGES_MAX); i++) {
@@ -233,7 +242,9 @@ static void touch_high_score_ages(s32 fileIndex) {
 /**
  * Copy save file data from one backup slot to the other slot.
  */
-static void restore_save_file_data(s32 fileIndex, s32 srcSlot) {
+void restore_save_file_data(s32 fileIndex, s32 srcSlot) {
+    CALL(RestoreSaveFileData, fileIndex, srcSlot);
+
     s32 destSlot = srcSlot ^ 1;
 
     // Compute checksum on source data
@@ -250,6 +261,9 @@ static void restore_save_file_data(s32 fileIndex, s32 srcSlot) {
 }
 
 void save_file_do_save(s32 fileIndex) {
+    CALL_EVENT(OnGameFileSave, fileIndex);
+    CALL(SaveFileDoSave, fileIndex);
+    
     if (gSaveFileModified) {
         // Compute checksum
         add_save_block_signature(&gSaveBuffer.files[fileIndex][0],
@@ -296,39 +310,44 @@ void save_file_load_all(void) {
     gSaveFileModified = FALSE;
 
     bzero(&gSaveBuffer, sizeof(gSaveBuffer));
-    read_eeprom_data(&gSaveBuffer, sizeof(gSaveBuffer));
 
-    // Verify the main menu data and create a backup copy if only one of the slots is valid.
-    validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
-    validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], sizeof(gSaveBuffer.menuData[1]),MENU_DATA_MAGIC) << 1;
-    switch (validSlots) {
-        case 0: // Neither copy is correct
-            wipe_main_menu_data();
-            break;
-        case 1: // Slot 0 is correct and slot 1 is incorrect
-            restore_main_menu_data(0);
-            break;
-        case 2: // Slot 1 is correct and slot 0 is incorrect
-            restore_main_menu_data(1);
-            break;
-    }
+    if(ShouldLoadOldSaveFile()) {
+        read_eeprom_data(&gSaveBuffer, EEPROM_SIZE);
 
-    for (file = 0; file < NUM_SAVE_FILES; file++) {
-        // Verify the save file and create a backup copy if only one of the slots is valid.
-        validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], sizeof(gSaveBuffer.files[file][0]), SAVE_FILE_MAGIC);
-        validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], sizeof(gSaveBuffer.files[file][1]), SAVE_FILE_MAGIC) << 1;
+        // Verify the main menu data and create a backup copy if only one of the slots is valid.
+        validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], MENU_SAVE_DATA_SIZE, MENU_DATA_MAGIC);
+        validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], MENU_SAVE_DATA_SIZE, MENU_DATA_MAGIC) << 1;
         switch (validSlots) {
             case 0: // Neither copy is correct
-                save_file_erase(file);
+                wipe_main_menu_data();
                 break;
             case 1: // Slot 0 is correct and slot 1 is incorrect
-                restore_save_file_data(file, 0);
+                restore_main_menu_data(0);
                 break;
             case 2: // Slot 1 is correct and slot 0 is incorrect
-                restore_save_file_data(file, 1);
+                restore_main_menu_data(1);
                 break;
         }
+
+        for (file = 0; file < NUM_SAVE_FILES; file++) {
+            // Verify the save file and create a backup copy if only one of the slots is valid.
+            validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], SAVE_FILE_SIZE, SAVE_FILE_MAGIC);
+            validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], SAVE_FILE_SIZE, SAVE_FILE_MAGIC) << 1;
+            switch (validSlots) {
+                case 0: // Neither copy is correct
+                    save_file_erase(file);
+                    break;
+                case 1: // Slot 0 is correct and slot 1 is incorrect
+                    restore_save_file_data(file, 0);
+                    break;
+                case 2: // Slot 1 is correct and slot 0 is incorrect
+                    restore_save_file_data(file, 1);
+                    break;
+            }
+        }
     }
+
+    CALL(SaveFileLoadAll);
 
     stub_save_file_1();
 }
@@ -403,6 +422,7 @@ void save_file_collect_star_or_key(s16 coinScore, s16 starIndex) {
         default:
             if (!(save_file_get_star_flags(fileIndex, courseIndex) & starFlag)) {
                 save_file_set_star_flags(fileIndex, courseIndex, starFlag);
+                CALL_EVENT(StarCollected, courseIndex, starIndex);
             }
             break;
     }

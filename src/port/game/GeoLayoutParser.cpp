@@ -4,30 +4,26 @@
 #include <libultraship.h>
 
 #include "port/Engine.h"
-#include "port/hooks/Events.h"
+#include "port/events/Events.h"
 #include "port/interpolation/FrameInterpolation.h"
 
 #include "engine/geo_layout.h"
-
-extern "C" {
-#include "engine/graph_node.h"
-#include "engine/math_util.h"
-
-// Function Table
+#include "game/paintings.h"
 #include "menu/intro_geo.h"
+#include "engine/graph_node.h"
+#include "game/camera.h"
+#include "game/geo_misc.h"
+#include "engine/math_util.h"
+#include "menu/file_select.h"
+#include "menu/star_select.h"
 #include "game/object_helpers.h"
 #include "game/behavior_actions.h"
 #include "game/mario_misc.h"
-#include "game/camera.h"
 #include "game/mario_actions_cutscene.h"
 #include "game/level_geo.h"
 #include "game/moving_texture.h"
 #include "game/screen_transition.h"
-#include "game/paintings.h"
-#include "game/geo_misc.h"
-#include "menu/star_select.h"
-#include "menu/file_select.h"
-}
+
 Ship::BinaryReader* GeoLayoutParser::mReader = nullptr;
 
 typedef void (*GeoCommandFunction)();
@@ -38,9 +34,9 @@ struct GraphNodeEntry {
     GraphNodeFunc function;
 };
 
-#define FUNC(f)                                  \
-    GraphNodeEntry {                             \
-#f, reinterpret_cast < GraphNodeFunc>(f) \
+#define FUNC(f)                                \
+    GraphNodeEntry {                           \
+        #f, reinterpret_cast<GraphNodeFunc>(f) \
     }
 
 std::unordered_map<uint32_t, GraphNodeEntry> mUSFunctionTable = {
@@ -333,19 +329,21 @@ void process_cmd_node_perspective() {
     GraphNodeFunc frustumFunc = nullptr;
 
     const auto param = GeoLayoutParser::mReader->ReadUByte();
-    const auto fov = GeoLayoutParser::mReader->ReadInt16();
-    const auto _near = GeoLayoutParser::mReader->ReadInt16();
-    const auto _far = GeoLayoutParser::mReader->ReadInt16();
+    auto fov = GeoLayoutParser::mReader->ReadInt16();
+    auto _near = GeoLayoutParser::mReader->ReadInt16();
+    auto _far = GeoLayoutParser::mReader->ReadInt16();
 
     if (param != 0) {
         const auto func = GeoLayoutParser::mReader->ReadUInt32();
         frustumFunc = GetFunctionByAddr(func, "NODE_PERSPECTIVE");
     }
 
-    GraphNodePerspective* graphNode =
-        init_graph_node_perspective(gGraphNodePool, nullptr, (f32)fov, _near, _far, frustumFunc, 0);
-
-    register_scene_graph_node(&graphNode->fnNode.node);
+    auto fovF = (f32)fov;
+    CALL_CANCELLABLE_EVENT(GeoLayoutNodePerspective, &fovF, &_near, &_far, &frustumFunc) {
+        GraphNodePerspective* graphNode =
+            init_graph_node_perspective(gGraphNodePool, nullptr, fovF, _near, _far, frustumFunc, 0);
+        register_scene_graph_node(&graphNode->fnNode.node);
+    }
 }
 
 void process_cmd_node_start() {
@@ -374,35 +372,30 @@ void process_cmd_node_level_of_detail() {
 }
 
 void process_cmd_node_switch_case() {
+    auto cs = GeoLayoutParser::mReader->ReadInt16();
+    GraphNodeFunc func = GetFunctionByAddr(GeoLayoutParser::mReader->ReadUInt32(), "NODE_SWITCH_CASE");
 
-    const auto cs = GeoLayoutParser::mReader->ReadInt16();
-    const auto func = GeoLayoutParser::mReader->ReadUInt32();
-
-    GraphNodeSwitchCase* graphNode =
-        init_graph_node_switch_case(gGraphNodePool, nullptr,
-                                    cs,                                             // case which is initially selected
-                                    0, GetFunctionByAddr(func, "NODE_SWITCH_CASE"), // case update function
-                                    0);
-
-    register_scene_graph_node(&graphNode->fnNode.node);
+    CALL_CANCELLABLE_EVENT(GeoLayoutNodeSwitchCase, &cs, &func) {
+        GraphNodeSwitchCase* graphNode = init_graph_node_switch_case(gGraphNodePool, nullptr, cs, 0, func, 0);
+        register_scene_graph_node(&graphNode->fnNode.node);
+    }
 }
 
 void process_cmd_node_camera() {
     Vec3f pos, focus;
 
-    const auto type = GeoLayoutParser::mReader->ReadInt16();
+    auto type = GeoLayoutParser::mReader->ReadInt16();
 
     ReadVec3f(pos);
     ReadVec3f(focus);
 
-    const auto addr = GeoLayoutParser::mReader->ReadUInt32();
+    GraphNodeFunc func = GetFunctionByAddr(GeoLayoutParser::mReader->ReadUInt32(), "NODE_CAMERA");
 
-    GraphNodeCamera* graphNode =
-        init_graph_node_camera(gGraphNodePool, nullptr, pos, focus, GetFunctionByAddr(addr, "NODE_CAMERA"), type);
-
-    register_scene_graph_node(&graphNode->fnNode.node);
-
-    gGeoViews[0] = &graphNode->fnNode.node;
+    CALL_CANCELLABLE_EVENT(GeoLayoutNodeCamera, &type, pos, focus, &func) {
+        GraphNodeCamera* graphNode = init_graph_node_camera(gGraphNodePool, nullptr, pos, focus, func, type);
+        register_scene_graph_node(&graphNode->fnNode.node);
+        gGeoViews[0] = &graphNode->fnNode.node;
+    }
 }
 
 void process_cmd_node_translation_rotation() {
@@ -578,16 +571,14 @@ void process_cmd_node_generated() {
 }
 
 void process_cmd_node_background() {
-    const auto param = GeoLayoutParser::mReader->ReadInt16();
+    auto param = GeoLayoutParser::mReader->ReadInt16();
     const auto addr = GeoLayoutParser::mReader->ReadUInt32();
+    GraphNodeFunc func = GetFunctionByAddr(addr, "NODE_BACKGROUND");
 
-    GraphNodeBackground* graphNode =
-        init_graph_node_background(gGraphNodePool, nullptr,
-                                   param, // background ID, or RGBA5551 color if asm function is null
-                                   GetFunctionByAddr(addr, "NODE_BACKGROUND"), // asm function
-                                   0);
-
-    register_scene_graph_node(&graphNode->fnNode.node);
+    CALL_CANCELLABLE_EVENT(GeoLayoutCallASM, &func, &param) {
+        GraphNodeBackground* graphNode = init_graph_node_background(gGraphNodePool, nullptr, param, func, 0);
+        register_scene_graph_node(&graphNode->fnNode.node);
+    }
 }
 
 void process_cmd_nop() {

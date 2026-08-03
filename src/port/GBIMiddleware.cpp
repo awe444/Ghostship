@@ -61,7 +61,7 @@ extern "C" void gSPDisplayList(Gfx* pkt, Gfx* dl) {
         auto res = std::static_pointer_cast<Fast::DisplayList>(resource);
         dl = &res->Instructions[0];
 #ifdef USE_GBI_TRACE
-        printf("DisplayList: %s\n", imgData);
+        // printf("DisplayList: %s\n", imgData);
         for (int i = 0; i < res->Instructions.size(); i++) {
             auto gfx = &res->Instructions[i];
             gfx->words.trace.file = imgData;
@@ -90,7 +90,7 @@ extern "C" void gSPInvalidateTexCache(Gfx* pkt, uintptr_t texAddr) {
         auto res = Ship::Context::GetInstance()->GetResourceManager()->LoadResource(imgData);
 
         if (res->GetInitData()->Type == (uint32_t)Fast::ResourceType::DisplayList)
-            texAddr = (uintptr_t) & ((std::static_pointer_cast<Fast::DisplayList>(res))->Instructions[0]);
+            texAddr = (uintptr_t)&((std::static_pointer_cast<Fast::DisplayList>(res))->Instructions[0]);
         else {
             texAddr = (uintptr_t)res->GetRawPointer();
         }

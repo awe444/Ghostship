@@ -46,6 +46,7 @@
 #define CODEC_ADPCM 0
 #define CODEC_S8 1
 #define CODEC_SKIP 2
+#define CODEC_S16 5  // raw 16-bit PCM for custom audio injection
 
 #ifdef VERSION_JP
 #define TEMPO_SCALE 1
@@ -174,11 +175,16 @@ struct AdpcmBook {
 
 struct AudioBankSample {
 #ifdef VERSION_SH
+#if !IS_BIG_ENDIAN
+    u32 size : 24;
+#endif
     /* 0x00 */ u32 codec : 4;
     /* 0x00 */ u32 medium : 2;
     /* 0x00 */ u32 bit1 : 1;
     /* 0x00 */ u32 isPatched : 1;
+#if IS_BIG_ENDIAN
     /* 0x01 */ u32 size : 24;
+#endif
 #else
     u8 unused;
     u8 loaded;
@@ -188,6 +194,8 @@ struct AudioBankSample {
     struct AdpcmBook *book;
 #ifndef VERSION_SH
     u32 sampleSize; // never read. either 0 or 1 mod 9, depending on padding
+    u8 codec;       // sample codec (CODEC_ADPCM=0, CODEC_S8=1, CODEC_SKIP=2, CODEC_S16=5)
+    u32 numFrames;  // total PCM frames; used by CODEC_S16 path
 #endif
 };
 
@@ -260,7 +268,9 @@ struct SequencePlayer {
     /*0x000, 0x000*/ u8 muted : 1;
     /*0x000, 0x000*/ u8 seqDmaInProgress : 1;
     /*0x000, 0x000*/ u8 bankDmaInProgress : 1;
+#if defined(VERSION_EU) || defined(VERSION_SH)
     /*       0x000*/ u8 recalculateVolume : 1;
+#endif
 #ifdef VERSION_SH
     /*              0x000*/ u8 unkSh: 1;
 #endif
@@ -439,6 +449,9 @@ struct SequenceChannel {
                    u8 unkSH06; // some priority
 #endif
     /*0x05, 0x06*/ u8 bankId;
+    /*          */ u8 surroundEffectIndex; // Surround depth: 0 = front, 0x7F = behind
+    /*          */ u8 combFilterSize;      // Comb filter size (delay in bytes, typically 0x28)
+    /*          */ u16 combFilterGain;     // Comb filter gain for surround height effect
 #if defined(VERSION_EU) || defined(VERSION_SH)
     /*    , 0x07*/ u8 reverbIndex;
     /*    , 0x08, 0x09*/ u8 bookOffset;
@@ -560,6 +573,7 @@ struct NoteSynthesisState {
     /*      0x04*/ u8 reverbVol;
     /*      0x05*/ u8 unk5;
 #endif
+    /*    */ u8 combFilterNeedsInit; // TRUE if comb filter state needs to be cleared
     /*0x04, 0x06*/ u16 samplePosFrac;
     /*0x08*/ s32 samplePosInt;
     /*0x0C*/ struct NoteSynthesisBuffers *synthesisBuffers;
@@ -627,10 +641,17 @@ struct Note {
     // when needed... This breaks alignment on non-N64 platforms, which we hack
     // around by skipping the padding in that case.
     // TODO: use macros or something instead.
+#ifdef TARGET_N64
+    u8 pad0[12];
+#endif
 
     /*0x04, 0x30, 0x30*/ u8 priority;
     /*      0x31, 0x31*/ u8 waveId;
     /*      0x32, 0x32*/ u8 sampleCountIndex;
+    /*                */ u8 surroundEffectIndex; // Index for surround effect pan position
+    /*                */ u8 pan;                 // Pan position: 0 = left, 128 = center, 255 = right
+    /*                */ u8 combFilterSize;      // Comb filter size (delay in bytes)
+    /*                */ u16 combFilterGain;     // Comb filter gain for surround height effect
 #ifdef VERSION_SH
     /*            0x33*/ u8 bankId;
     /*            0x34*/ u8 unkSH34;
@@ -691,7 +712,11 @@ struct Note {
     /*0x3C*/ u16 targetVolLeft; // Q1.15, but will always be non-negative
     /*0x3E*/ u16 targetVolRight; // Q1.15, but will always be non-negative
     /*0x40*/ u8 reverbVol; // Q1.7
-    /*0x41*/ u8 unused1; // never read, set to 0x3f
+    /*0x41*/ u8 surroundEffectIndex; // Index for surround effect pan position
+    /*0x42*/ u8 pan; // Pan position: 0 = left, 128 = center, 255 = right
+    /*    */ u8 combFilterSize;      // Comb filter size (delay in bytes, typically 0x28)
+    /*    */ u8 combFilterNeedsInit; // TRUE if comb filter state needs to be cleared
+    /*    */ u16 combFilterGain;     // Comb filter gain for surround height effect
     /*0x44*/ struct NoteAttributes attributes;
     /*0x54, 0x58*/ struct AdsrState adsr;
     /*0x74, 0x7C*/ struct Portamento portamento;
@@ -721,6 +746,7 @@ struct NoteSynthesisBuffers {
     s16 samples[0x40];
 #endif
 #endif
+    s16 combFilterState[0x40]; // State buffer for comb filter (stores previous samples for delay)
 };
 
 #ifdef VERSION_EU
@@ -857,8 +883,8 @@ struct UnkStruct80343D00 {
 };
 
 // in external.c
-extern s32 D_SH_80343CF0;
-extern struct UnkStruct80343D00 D_SH_80343D00;
+extern_s s32 D_SH_80343CF0;
+extern_s struct UnkStruct80343D00 D_SH_80343D00;
 #endif
 
 #endif // AUDIO_INTERNAL_H

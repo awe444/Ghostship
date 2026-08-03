@@ -25,16 +25,15 @@
 #include "types.h"
 #include "port/interpolation/FrameInterpolation.h"
 #include <ship/utils/binarytools/endianness.h>
-#include "port/hooks/impl/EventSystem.h"
-#include "port/hooks/list/EngineEvent.h"
+#include "port/events/list/EngineEvent.h"
 
 #ifdef VERSION_EU
 #undef LANGUAGE_FUNCTION
 #define LANGUAGE_FUNCTION gInGameLanguage
 #endif
 
-static unsigned char textPause[] = { 0x19,0x0A,0x1E,0x1C,0x0E,0xFF };
-static unsigned char textHudCongratulations[] = { 0x0C,0x18,0x17,0x10,0x1B,0x0A,0x1D,0x1E,0x15,0x0A,0x1D,0x12,0x18,0x17,0x1C,0xFF };
+unsigned char textPause[] = { 0x19,0x0A,0x1E,0x1C,0x0E,0xFF };
+unsigned char textHudCongratulations[] = { 0x0C,0x18,0x17,0x10,0x1B,0x0A,0x1D,0x1E,0x15,0x0A,0x1D,0x12,0x18,0x17,0x1C,0xFF };
 
 u16 gDialogColorFadeTimer;
 s8 gLastDialogLineNum;
@@ -213,7 +212,7 @@ void create_dl_ortho_matrix(void) {
     gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(matrix), G_MTX_PROJECTION | G_MTX_MUL | G_MTX_NOPUSH);
 }
 
-static u8 *alloc_ia8_text_from_i1(u16 *in, s16 width, s16 height) {
+u8 *alloc_ia8_text_from_i1(u16 *in, s16 width, s16 height) {
     s32 inPos;
     u16 bitMask;
     u8 *out;
@@ -1161,6 +1160,7 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
         switch (strChar) {
             case DIALOG_CHAR_TERMINATOR:
                 pageState = DIALOG_PAGE_STATE_END;
+                gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
                 break;
             case DIALOG_CHAR_NEWLINE:
                 lineNum++;
@@ -1187,25 +1187,30 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
                     adjust_pos_and_print_period_char(&xMatrix, &linePos);
                     break;
                 }
+                goto skip;
             case DIALOG_CHAR_SLASH:
                 if(!ROM_JP) {
                     xMatrix += 2;
                     linePos += 2;
                     break;
                 }
+                goto skip;
             case DIALOG_CHAR_MULTI_THE:
                 if(!ROM_JP) {
                     render_multi_text_string_lines(STRING_THE, lineNum, &linePos, linesPerBox, xMatrix, lowerBound);
                     xMatrix = 1;
                     break;
                 }
+                goto skip;
             case DIALOG_CHAR_MULTI_YOU:
                 if(!ROM_JP) {
                     render_multi_text_string_lines(STRING_YOU, lineNum, &linePos, linesPerBox, xMatrix, lowerBound);
                     xMatrix = 1;
                     break;
                 }
+                goto skip;
             default:
+            skip:
                 FrameInterpolation_RecordOpenChild("render_dialog_text_and_pages:render_char", TAG_LETTER(strChar));
                 if(ROM_JP) {
                     if (linePos != 0) {
@@ -1291,6 +1296,7 @@ void render_dialog_triangle_choice(void) {
         handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, &gDialogLineNum, 1, 2);
     }
 
+    FrameInterpolation_RecordOpenChild("render_dialog_triangle_choice", 0);
     create_dl_translation_matrix(MENU_MTX_NOPUSH, (gDialogLineNum * X_VAL4_1) - X_VAL4_2, Y_VAL4_1 - (gLastDialogLineNum * Y_VAL4_2), 0);
 
     if (gDialogBoxType == DIALOG_TYPE_ROTATE) {
@@ -1300,6 +1306,7 @@ void render_dialog_triangle_choice(void) {
     }
 
     gSPDisplayList(gDisplayListHead++, dl_draw_triangle);
+    FrameInterpolation_RecordCloseChild();
 }
 
 #if defined(VERSION_US)
@@ -1356,6 +1363,7 @@ void handle_special_dialog_text(s16 dialogID) { // dialog ID tables, in order
         if (dialogBossStart[i] == dialogID) {
             seq_player_unlower_volume(SEQ_PLAYER_LEVEL, 60);
             play_music(SEQ_PLAYER_LEVEL, SEQUENCE_ARGS(4, SEQ_EVENT_BOSS), 0);
+            CALL_EVENT(BossBattleStarted, BOSS_BATTLE_GENERIC);
             return;
         }
     }
@@ -1463,6 +1471,11 @@ s8 gDialogCourseActNum = 1;
 #define DIAG_VAL4 (ROM_JP ? 4 : 5)
 
 void render_dialog_entries(void) {
+    CALL_CANCELLABLE_EVENT(DialogOverride, gDialogID) {}
+    if (DialogOverride_.Event.Cancelled) {
+        return;
+    }
+
 #ifdef VERSION_EU
     s8 lowerBound;
 #endif
@@ -1588,7 +1601,6 @@ void render_dialog_entries(void) {
     bool shouldInterpolate = gDialogScrollOffsetY != 0;
     FrameInterpolation_ShouldInterpolateFrame(shouldInterpolate);
     handle_dialog_text_and_pages(0, dialog, lowerBound);
-    FrameInterpolation_ShouldInterpolateFrame(true);
 
     if (gLastDialogPageStrPos == -1 && gLastDialogResponse == 1) {
         render_dialog_triangle_choice();
@@ -1607,6 +1619,8 @@ void render_dialog_entries(void) {
     if (gLastDialogPageStrPos != -1 && gDialogBoxState == DIALOG_STATE_VERTICAL) {
         render_dialog_triangle_next(dialog->linesPerBox);
     }
+
+    FrameInterpolation_ShouldInterpolateFrame(true);
 }
 
 // Calls a gMenuMode value defined by render_menus_and_dialogs cases
@@ -2081,11 +2095,13 @@ void render_pause_course_options(s16 x, s16 y, s8 *index, s16 yIndex) {
         print_generic_string(x + 10, y - 33, GameEngine_LoadTranslation("TEXT_CAMERA_ANGLE_R"));
         gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
 
+        FrameInterpolation_RecordOpenChild("render_pause_course_options:cursor", 0);
         create_dl_translation_matrix(MENU_MTX_PUSH, x - X_VAL8, (y - ((*index - 1) * yIndex)) - Y_VAL8, 0);
 
         gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
         gSPDisplayList(gDisplayListHead++, dl_draw_triangle);
         gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
+        FrameInterpolation_RecordCloseChild();
     }
 
     if (*index == MENU_OPT_CAMERA_ANGLE_R) {
@@ -2278,6 +2294,11 @@ s8 gHudFlash = 0;
 
 s16 render_pause_courses_and_castle(void) {
     s16 index;
+
+    CALL_CANCELLABLE_EVENT(PauseMenuOverride, gMenuMode) {}
+    if (PauseMenuOverride_.Event.Cancelled) {
+        return MENU_OPT_NONE;
+    }
 
 #ifdef VERSION_EU
     gInGameLanguage = eu_get_language();
@@ -2620,16 +2641,24 @@ void render_save_confirmation(s16 x, s16 y, s8 *index, s16 yOffset)
 
     gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
 
+    FrameInterpolation_RecordOpenChild("render_save_and_continue_options:cursor", 0);
     create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL9, y - ((*index - 1) * yOffset), 0);
 
     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
     gSPDisplayList(gDisplayListHead++, dl_draw_triangle);
 
     gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
+    FrameInterpolation_RecordCloseChild();
 }
 
 s16 render_course_complete_screen(void) {
     s16 index;
+
+    CALL_CANCELLABLE_EVENT(CourseCompleteOverride, gCurrCourseNum) {}
+    if (CourseCompleteOverride_.Event.Cancelled) {
+        return MENU_OPT_NONE;
+    }
+
 #ifdef VERSION_EU
     gInGameLanguage = eu_get_language();
 #endif

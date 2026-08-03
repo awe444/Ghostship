@@ -1,13 +1,18 @@
 #include "PortEnhancements.h"
+#include "mirror/MirrorMode.h"
 
 #define INIT_EVENT_IDS
 
 #include "sm64.h"
 #include "game/level_update.h"
-#include "menu/title_screen.h"
-#include "port/hooks/Events.h"
+#include "game/game_init.h"
+#include "port/events/Events.h"
 #include "assets/bin/segment2.h"
-#include "port/ShipInit.hpp"
+#include "port/Rando/Rando.h"
+#include "port/ShipUtils.h"
+
+uint8_t textRand[] = { 0x1B, 0x0A, 0x17, 0x0D, 0xFF };
+uint8_t textMarioRando[] = { 0x1B, 0x0A, 0x17, 0x0D, 0x18, 0x16, 0x12, 0x23, 0x0E, 0x1B, 0xFF };
 
 static const Mtx matrix_patch_identity = {
     { { 1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } }
@@ -49,6 +54,12 @@ void PortEnhancements_Init() {
     PortEnhancements_Register();
     PatchSetupDList();
 
+    // Initialize mirror mode
+    mirror_mode_init();
+
+    // Register event listeners
+    REGISTER_LISTENER(RenderHud, EVENT_PRIORITY_NORMAL, [](IEvent* event) { mirror_mode_undo_projection(); });
+
     // Register event listeners
     REGISTER_LISTENER(PlayerHealthChange, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
         PlayerHealthChange* ev = (PlayerHealthChange*)event;
@@ -56,7 +67,7 @@ void PortEnhancements_Init() {
             return;
         }
 
-        event->cancelled = true;
+        event->Cancelled = true;
     });
     REGISTER_LISTENER(PlayerLivesChange, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
         PlayerLivesChange* ev = (PlayerLivesChange*)event;
@@ -64,7 +75,7 @@ void PortEnhancements_Init() {
             return;
         }
 
-        event->cancelled = true;
+        event->Cancelled = true;
     });
     REGISTER_LISTENER(RenderPauseCourseOptions, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
         if (CVarGetInteger("gCheats.PauseExitWhenever", 0) == 0) {
@@ -80,17 +91,179 @@ void PortEnhancements_Init() {
             gNeverEnteredCastle = false;
         }
     });
+
+    REGISTER_LISTENER(SetTripleJumpAction, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
+        if (CVarGetInteger("gCheats.AlwaysFlyTripleJump", 0) == 0) {
+            return;
+        }
+        SetTripleJumpAction* ev = (SetTripleJumpAction*)event;
+        *ev->useFlyingVariant = true;
+    });
+    REGISTER_LISTENER(FlyingActionUpdate, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
+        if (CVarGetInteger("gCheats.AlwaysFlyTripleJump", 0) == 0) {
+            return;
+        }
+        FlyingActionUpdate* ev = (FlyingActionUpdate*)event;
+        *ev->canFly = true;
+    });
+    REGISTER_LISTENER(FlyingTripleJumpLaunch, EVENT_PRIORITY_NORMAL, [](IEvent* event) {
+        if (CVarGetInteger("gCheats.FlyingTripleJumpHighLaunch", 0) == 0) {
+            return;
+        }
+        FlyingTripleJumpLaunch* ev = (FlyingTripleJumpLaunch*)event;
+        *ev->launchVelocity = 246.0f;
+    });
+
+    auto OnDistanceFunc = [](IEvent* event) {
+        if (CVarGetInteger("gEnhancements.DisableDrawDistance", 0) == 0) {
+            return;
+        }
+
+        EntityDistanceRender* ev = (EntityDistanceRender*)event;
+        *ev->visible = true;
+    };
+
+    REGISTER_LISTENER(EntityDistanceLoad, EVENT_PRIORITY_NORMAL, OnDistanceFunc);
+    REGISTER_LISTENER(EntityDistanceRender, EVENT_PRIORITY_NORMAL, OnDistanceFunc);
 }
 
 void PortEnhancements_Register() {
     // Register engine events
+    REGISTER_EVENT(OnGameFileLoad);
+    REGISTER_EVENT(OnGameFileSave);
     REGISTER_EVENT(GameFrameUpdate);
-    REGISTER_EVENT(LevelInitFromSaveFile);
+    REGISTER_EVENT(GameLoopTick);
+    REGISTER_EVENT(GameReadInput);
+    REGISTER_EVENT(BehaviorCallNative);
+    REGISTER_EVENT(RenderHud);
+    REGISTER_EVENT(RenderTextLabels);
+    REGISTER_EVENT(RenderGamePre);
+    REGISTER_EVENT(RenderGamePost);
     REGISTER_EVENT(GeoLayoutCallASM);
+    REGISTER_EVENT(RenderHudLives);
+    REGISTER_EVENT(RenderHudCoins);
+    REGISTER_EVENT(RenderHudStars);
+    REGISTER_EVENT(RenderHudPowerMeter);
+    REGISTER_EVENT(RenderHudCameraStatus);
+    REGISTER_EVENT(RenderHudTimer);
+    REGISTER_EVENT(SkyboxRender);
+    REGISTER_EVENT(MovingTextureRender);
+    REGISTER_EVENT(ScreenTransitionFadeOut);
+    REGISTER_EVENT(ScreenTransitionFadeIn);
+    REGISTER_EVENT(ScreenTransitionTexture);
+    REGISTER_EVENT(StarSelectRender);
+    REGISTER_EVENT(FileSelectOverride);
+    REGISTER_EVENT(StarSelectOverride);
+    REGISTER_EVENT(PauseMenuOverride);
+    REGISTER_EVENT(CourseCompleteOverride);
+    REGISTER_EVENT(DialogOverride);
+    REGISTER_EVENT(GeoLayoutBegin);
+    REGISTER_EVENT(GeoLayoutEnd);
+    REGISTER_EVENT(GeoLayoutNodePerspective);
+    REGISTER_EVENT(GeoLayoutNodeCamera);
+    REGISTER_EVENT(GeoLayoutNodeSwitchCase);
+    REGISTER_EVENT(GeoLayoutNodeScale);
+    REGISTER_EVENT(GeoLayoutNodeShadow);
+    REGISTER_EVENT(GeoLayoutNodeDisplayList);
+    REGISTER_EVENT(LevelScriptEntry);
+    REGISTER_EVENT(LevelScriptExecute);
+    REGISTER_EVENT(EntityDistanceLoad);
     REGISTER_EVENT(LevelScriptCallLoop);
     REGISTER_EVENT(LevelScriptBeginArea);
+    REGISTER_EVENT(EntityDistanceRender);
+    REGISTER_EVENT(LevelInitFromSaveFile);
     REGISTER_EVENT(RenderPauseCourseOptions);
+    REGISTER_EVENT(EngineReady);
+    REGISTER_EVENT(CameraUpdate);
+    REGISTER_EVENT(KeyboardInput);
+    REGISTER_EVENT(LevelScriptOverride);
+    REGISTER_EVENT(FileSelectRender);
 
+    // Register player events
     REGISTER_EVENT(PlayerHealthChange);
     REGISTER_EVENT(PlayerLivesChange);
+    REGISTER_EVENT(PlayerStartedDialog);
+    REGISTER_EVENT(PlayerDeath);
+    REGISTER_EVENT(PlayerSetAction);
+    REGISTER_EVENT(PlayerExecuteAction);
+    REGISTER_EVENT(SetTripleJumpAction);
+    REGISTER_EVENT(FlyingActionUpdate);
+    REGISTER_EVENT(FlyingTripleJumpLaunch);
+    REGISTER_EVENT(PlayerCheckCommonAirborneCancels);
+    REGISTER_EVENT(PlayerLanded);
+    REGISTER_EVENT(PlayerHit);
+    REGISTER_EVENT(PlayerKnockback);
+    REGISTER_EVENT(CannonEntered);
+    REGISTER_EVENT(PoleGrabbed);
+    REGISTER_EVENT(HootGrabbed);
+    REGISTER_EVENT(ShellMounted);
+    REGISTER_EVENT(FlameHit);
+    REGISTER_EVENT(ShockHit);
+    REGISTER_EVENT(BreakableHit);
+    REGISTER_EVENT(PlayerCapGained);
+    REGISTER_EVENT(PlayerObjectGrabbed);
+    REGISTER_EVENT(PlayerObjectThrown);
+    REGISTER_EVENT(PlayerObjectDropped);
+    REGISTER_EVENT(PlayerBounceOnEnemy);
+    REGISTER_EVENT(PlayerTripleJump);
+    REGISTER_EVENT(PlayerWallJump);
+    REGISTER_EVENT(PlayerLongJump);
+    REGISTER_EVENT(PlayerBackflip);
+    REGISTER_EVENT(PlayerGroundPoundStart);
+    REGISTER_EVENT(PlayerGroundPoundLand);
+    REGISTER_EVENT(PlayerWaterEntry);
+    REGISTER_EVENT(PlayerWaterExit);
+    REGISTER_EVENT(PlayerFloorTypeChange);
+    REGISTER_EVENT(PlayerQuicksandSink);
+    REGISTER_EVENT(PlayerWindForce);
+
+    // Register Rando Events
+    REGISTER_EVENT(ItemCollected);
+    REGISTER_EVENT(MacroObjectOverride);
+    REGISTER_EVENT(SpawnStar);
+    REGISTER_EVENT(SpawnCoinStar);
+    REGISTER_EVENT(ModifyDefaultStar);
+    REGISTER_EVENT(ModifyObjectBehavior);
+    REGISTER_EVENT(ModifyRedCoinCount);
+    REGISTER_EVENT(ModifyObjectVisibility);
+    REGISTER_EVENT(ChangeLevel);
+    REGISTER_EVENT(ExitLevel);
+
+    // Register game events
+    REGISTER_EVENT(CapSwitchActivated);
+    REGISTER_EVENT(ChainChompRelease);
+    REGISTER_EVENT(BossDefeated);
+    REGISTER_EVENT(SpawnCollectible);
+    REGISTER_EVENT(BossBattleStarted);
+    REGISTER_EVENT(BossBattleEnded);
+    REGISTER_EVENT(MusicChanged);
+    REGISTER_EVENT(GameEnded);
+    REGISTER_EVENT(ObjectSpawned);
+    REGISTER_EVENT(ObjectDestroyed);
+    REGISTER_EVENT(StarCollected);
+    REGISTER_EVENT(CutsceneStart);
+    REGISTER_EVENT(CutsceneEnd);
+    REGISTER_EVENT(WarpStart);
+    REGISTER_EVENT(WarpEnd);
+    REGISTER_EVENT(ButtonPressed);
+    REGISTER_EVENT(PaintingEntered);
+    REGISTER_EVENT(PaintingRipple);
+    REGISTER_EVENT(WaterRingPickup);
+    REGISTER_EVENT(TornadoInteraction);
+    REGISTER_EVENT(WarpDoorInteraction);
+    REGISTER_EVENT(BehaviorTick);
+
+    // Register audio events
+    REGISTER_EVENT(PlayMusicEvent);
+    REGISTER_EVENT(StopMusicEvent);
+    REGISTER_EVENT(FadeoutMusicEvent);
+    REGISTER_EVENT(PlaySecondaryMusicEvent);
+    REGISTER_EVENT(PlaySfxEvent);
+    REGISTER_EVENT(PlayDialogSoundEvent);
+    REGISTER_EVENT(AudioUpdateEvent);
+    REGISTER_EVENT(SeqLayerPreNoteEvent);
+    REGISTER_EVENT(SeqLayerPostNoteEvent);
+
+    Rando::Init();
+    LoadGuiTextures();
 }

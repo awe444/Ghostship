@@ -1,4 +1,5 @@
 #include <libultra/types.h>
+#include "port/events/list/PlayerEvent.h"
 
 #include "area.h"
 #include "actors/common1.h"
@@ -81,7 +82,7 @@ struct InteractionHandler {
     u32 (*handler)(struct MarioState *, u32, struct Object *);
 };
 
-static struct InteractionHandler sInteractionHandlers[] = {
+struct InteractionHandler sInteractionHandlers[] = {
     { INTERACT_COIN,           interact_coin },
     { INTERACT_WATER_RING,     interact_water_ring },
     { INTERACT_STAR_OR_KEY,    interact_star_or_key },
@@ -115,21 +116,21 @@ static struct InteractionHandler sInteractionHandlers[] = {
     { INTERACT_TEXT,           interact_text },
 };
 
-static u32 sForwardKnockbackActions[][3] = {
+u32 sForwardKnockbackActions[][3] = {
     { ACT_SOFT_FORWARD_GROUND_KB, ACT_FORWARD_GROUND_KB, ACT_HARD_FORWARD_GROUND_KB },
     { ACT_FORWARD_AIR_KB,         ACT_FORWARD_AIR_KB,    ACT_HARD_FORWARD_AIR_KB },
     { ACT_FORWARD_WATER_KB,       ACT_FORWARD_WATER_KB,  ACT_FORWARD_WATER_KB },
 };
 
-static u32 sBackwardKnockbackActions[][3] = {
+u32 sBackwardKnockbackActions[][3] = {
     { ACT_SOFT_BACKWARD_GROUND_KB, ACT_BACKWARD_GROUND_KB, ACT_HARD_BACKWARD_GROUND_KB },
     { ACT_BACKWARD_AIR_KB,         ACT_BACKWARD_AIR_KB,    ACT_HARD_BACKWARD_AIR_KB },
     { ACT_BACKWARD_WATER_KB,       ACT_BACKWARD_WATER_KB,  ACT_BACKWARD_WATER_KB },
 };
 
-static u8 sDisplayingDoorText = FALSE;
-static u8 sJustTeleported = FALSE;
-static u8 sPssSlideStarted = FALSE;
+u8 sDisplayingDoorText = FALSE;
+u8 sJustTeleported = FALSE;
+u8 sPssSlideStarted = FALSE;
 
 /**
  * Returns the type of cap Mario is wearing.
@@ -289,11 +290,13 @@ void mario_grab_used_object(struct MarioState *m) {
     if (m->heldObj == NULL) {
         m->heldObj = m->usedObj;
         obj_set_held_state(m->heldObj, bhvCarrySomething3);
+        CALL_EVENT(PlayerObjectGrabbed, m, m->heldObj);
     }
 }
 
 void mario_drop_held_object(struct MarioState *m) {
     if (m->heldObj != NULL) {
+        CALL_EVENT(PlayerObjectDropped, m, m->heldObj);
         if (m->heldObj->behavior == segmented_to_virtual(bhvKoopaShellUnderwater)) {
             stop_shell_music();
         }
@@ -315,6 +318,7 @@ void mario_drop_held_object(struct MarioState *m) {
 
 void mario_throw_held_object(struct MarioState *m) {
     if (m->heldObj != NULL) {
+        CALL_EVENT(PlayerObjectThrown, m, m->heldObj);
         if (m->heldObj->behavior == segmented_to_virtual(bhvKoopaShellUnderwater)) {
             stop_shell_music();
         }
@@ -526,7 +530,7 @@ void hit_object_from_below(struct MarioState *m, UNUSED struct Object *o) {
     set_camera_shake_from_hit(SHAKE_HIT_FROM_BELOW);
 }
 
-UNUSED static u32 unused_determine_knockback_action(struct MarioState *m) {
+UNUSED u32 unused_determine_knockback_action(struct MarioState *m) {
     u32 bonkAction;
     s16 angleToObject = mario_obj_angle_to_object(m, m->interactObj);
     s16 facingDYaw = angleToObject - m->faceAngle[1];
@@ -609,6 +613,8 @@ u32 determine_knockback_action(struct MarioState *m, UNUSED s32 arg) {
         m->faceAngle[1] += 0x8000;
         bonkAction = sForwardKnockbackActions[terrainIndex][strengthIndex];
     }
+
+    CALL_EVENT(PlayerKnockback, m, &bonkAction);
 
     return bonkAction;
 }
@@ -698,6 +704,7 @@ u32 take_damage_from_interact_object(struct MarioState *m) {
     }
 
     m->hurtCounter += 4 * damage;
+    CALL_EVENT(PlayerHit, m, m->interactObj, damage);
 
 #if ENABLE_RUMBLE
     queue_rumble_data(5, 80);
@@ -741,14 +748,15 @@ void reset_mario_pitch(struct MarioState *m) {
 }
 
 u32 interact_coin(struct MarioState *m, UNUSED u32 interactType, struct Object *o) {
-    m->numCoins += o->oDamageOrCoinValue;
-    m->healCounter += 4 * o->oDamageOrCoinValue;
+    CALL_CANCELLABLE_EVENT(ItemCollected, TYPE_COIN, m, o) {
+        m->numCoins += o->oDamageOrCoinValue;
+        m->healCounter += 4 * o->oDamageOrCoinValue;
 
-    o->oInteractStatus = INT_STATUS_INTERACTED;
-
-    if (COURSE_IS_MAIN_COURSE(gCurrCourseNum) && m->numCoins - o->oDamageOrCoinValue < 100
-        && m->numCoins >= 100) {
-        bhv_spawn_star_no_level_exit(6);
+        o->oInteractStatus = INT_STATUS_INTERACTED;
+    
+        if (COURSE_IS_MAIN_COURSE(gCurrCourseNum) && m->numCoins - o->oDamageOrCoinValue < 100 && m->numCoins >= 100) {
+            bhv_spawn_star_no_level_exit(6);
+        }
     }
 #if ENABLE_RUMBLE
     if (o->oDamageOrCoinValue >= 2) {
@@ -760,8 +768,11 @@ u32 interact_coin(struct MarioState *m, UNUSED u32 interactType, struct Object *
 }
 
 u32 interact_water_ring(struct MarioState *m, UNUSED u32 interactType, struct Object *o) {
-    m->healCounter += 4 * o->oDamageOrCoinValue;
-    o->oInteractStatus = INT_STATUS_INTERACTED;
+    s32 healAmount = 4 * o->oDamageOrCoinValue;
+    CALL_CANCELLABLE_EVENT(WaterRingPickup, m, o, &healAmount) {
+        m->healCounter += healAmount;
+        o->oInteractStatus = INT_STATUS_INTERACTED;
+    }
     return FALSE;
 }
 
@@ -776,58 +787,58 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
 #if ENABLE_RUMBLE
         queue_rumble_data(5, 80);
 #endif
-
-        if (!noExit) {
-            m->hurtCounter = 0;
-            m->healCounter = 0;
-            if (m->capTimer > 1) {
-                m->capTimer = 1;
+        CALL_CANCELLABLE_EVENT(ItemCollected, TYPE_STAR, m, o) {
+            if (!noExit) {
+                m->hurtCounter = 0;
+                m->healCounter = 0;
+                if (m->capTimer > 1) {
+                    m->capTimer = 1;
+                }
             }
+
+            if (noExit) {
+                starGrabAction = ACT_STAR_DANCE_NO_EXIT;
+            }
+
+            if (m->action & ACT_FLAG_SWIMMING) {
+                starGrabAction = ACT_STAR_DANCE_WATER;
+            }
+
+            if (m->action & ACT_FLAG_METAL_WATER) {
+                starGrabAction = ACT_STAR_DANCE_WATER;
+            }
+
+            if (m->action & ACT_FLAG_AIR) {
+                starGrabAction = ACT_FALL_AFTER_STAR_GRAB;
+            }
+
+            spawn_object(o, MODEL_NONE, bhvStarKeyCollectionPuffSpawner);
+
+            o->oInteractStatus = INT_STATUS_INTERACTED;
+            m->interactObj = o;
+            m->usedObj = o;
+
+            starIndex = (o->oBehParams >> 24) & 0x1F;
+            save_file_collect_star_or_key(m->numCoins, starIndex);
+
+            m->numStars = save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);
+
+            if (!noExit) {
+                drop_queued_background_music();
+                fadeout_level_music(126);
+            }
+
+            play_sound(SOUND_MENU_STAR_SOUND, m->marioObj->header.gfx.cameraToObject);
+            if (!ROM_JP) {
+                update_mario_sound_and_camera(m);
+            }
+
+            if (grandStar) {
+                return set_mario_action(m, ACT_JUMBO_STAR_CUTSCENE, 0);
+            }
+
+            return set_mario_action(m, starGrabAction, noExit + 2 * grandStar);
         }
-
-        if (noExit) {
-            starGrabAction = ACT_STAR_DANCE_NO_EXIT;
-        }
-
-        if (m->action & ACT_FLAG_SWIMMING) {
-            starGrabAction = ACT_STAR_DANCE_WATER;
-        }
-
-        if (m->action & ACT_FLAG_METAL_WATER) {
-            starGrabAction = ACT_STAR_DANCE_WATER;
-        }
-
-        if (m->action & ACT_FLAG_AIR) {
-            starGrabAction = ACT_FALL_AFTER_STAR_GRAB;
-        }
-
-        spawn_object(o, MODEL_NONE, bhvStarKeyCollectionPuffSpawner);
-
-        o->oInteractStatus = INT_STATUS_INTERACTED;
-        m->interactObj = o;
-        m->usedObj = o;
-
-        starIndex = (o->oBehParams >> 24) & 0x1F;
-        save_file_collect_star_or_key(m->numCoins, starIndex);
-
-        m->numStars =
-            save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);
-
-        if (!noExit) {
-            drop_queued_background_music();
-            fadeout_level_music(126);
-        }
-
-        play_sound(SOUND_MENU_STAR_SOUND, m->marioObj->header.gfx.cameraToObject);
-        if(!ROM_JP) {
-            update_mario_sound_and_camera(m);
-        }
-
-        if (grandStar) {
-            return set_mario_action(m, ACT_JUMBO_STAR_CUTSCENE, 0);
-        }
-
-        return set_mario_action(m, starGrabAction, noExit + 2 * grandStar);
     }
 
     return FALSE;
@@ -948,7 +959,9 @@ u32 interact_warp_door(struct MarioState *m, UNUSED u32 interactType, struct Obj
 
             m->interactObj = o;
             m->usedObj = o;
-            return set_mario_action(m, doorAction, actionArg);
+            CALL_CANCELLABLE_EVENT(WarpDoorInteraction, m, o, &doorAction) {
+                return set_mario_action(m, doorAction, actionArg);
+            }
         }
     }
 
@@ -1068,7 +1081,9 @@ u32 interact_cannon_base(struct MarioState *m, UNUSED u32 interactType, struct O
         o->oInteractStatus = INT_STATUS_INTERACTED;
         m->interactObj = o;
         m->usedObj = o;
-        return set_mario_action(m, ACT_IN_CANNON, 0);
+        CALL_CANCELLABLE_EVENT(CannonEntered, m, o) {
+            return set_mario_action(m, ACT_IN_CANNON, 0);
+        }
     }
 
     return FALSE;
@@ -1088,22 +1103,24 @@ u32 interact_tornado(struct MarioState *m, UNUSED u32 interactType, struct Objec
     struct Object *marioObj = m->marioObj;
 
     if (m->action != ACT_TORNADO_TWIRLING && m->action != ACT_SQUISHED) {
-        mario_stop_riding_and_holding(m);
-        mario_set_forward_vel(m, 0.0f);
-        update_mario_sound_and_camera(m);
+        CALL_CANCELLABLE_EVENT(TornadoInteraction, m, o) {
+            mario_stop_riding_and_holding(m);
+            mario_set_forward_vel(m, 0.0f);
+            update_mario_sound_and_camera(m);
 
-        o->oInteractStatus = INT_STATUS_INTERACTED;
-        m->interactObj = o;
-        m->usedObj = o;
+            o->oInteractStatus = INT_STATUS_INTERACTED;
+            m->interactObj = o;
+            m->usedObj = o;
 
-        marioObj->oMarioTornadoYawVel = 0x400;
-        marioObj->oMarioTornadoPosY = m->pos[1] - o->oPosY;
+            marioObj->oMarioTornadoYawVel = 0x400;
+            marioObj->oMarioTornadoPosY = m->pos[1] - o->oPosY;
 
-        play_sound(SOUND_MARIO_WAAAOOOW, m->marioObj->header.gfx.cameraToObject);
+            play_sound(SOUND_MARIO_WAAAOOOW, m->marioObj->header.gfx.cameraToObject);
 #if ENABLE_RUMBLE
-        queue_rumble_data(30, 60);
+            queue_rumble_data(30, 60);
 #endif
-        return set_mario_action(m, ACT_TORNADO_TWIRLING, m->action == ACT_TWIRLING);
+            return set_mario_action(m, ACT_TORNADO_TWIRLING, m->action == ACT_TWIRLING);
+        }
     }
 
     return FALSE;
@@ -1177,7 +1194,9 @@ u32 interact_flame(struct MarioState *m, UNUSED u32 interactType, struct Object 
                 burningAction = ACT_BURNING_FALL;
             }
 
-            return drop_and_set_mario_action(m, burningAction, 1);
+            CALL_CANCELLABLE_EVENT(FlameHit, m, o, &burningAction) {
+                return drop_and_set_mario_action(m, burningAction, 1);
+            }
         }
     }
 
@@ -1275,22 +1294,24 @@ u32 interact_bully(struct MarioState *m, UNUSED u32 interactType, struct Object 
 u32 interact_shock(struct MarioState *m, UNUSED u32 interactType, struct Object *o) {
     if (!sInvulnerable && !(m->flags & MARIO_VANISH_CAP)
         && !(o->oInteractionSubtype & INT_SUBTYPE_DELAY_INVINCIBILITY)) {
-        u32 actionArg = (m->action & (ACT_FLAG_AIR | ACT_FLAG_ON_POLE | ACT_FLAG_HANGING)) == 0;
+        CALL_CANCELLABLE_EVENT(ShockHit, m, o) {
+            u32 actionArg = (m->action & (ACT_FLAG_AIR | ACT_FLAG_ON_POLE | ACT_FLAG_HANGING)) == 0;
 
-        o->oInteractStatus = INT_STATUS_INTERACTED | INT_STATUS_ATTACKED_MARIO;
-        m->interactObj = o;
+            o->oInteractStatus = INT_STATUS_INTERACTED | INT_STATUS_ATTACKED_MARIO;
+            m->interactObj = o;
 
-        take_damage_from_interact_object(m);
-        play_sound(SOUND_MARIO_ATTACKED, m->marioObj->header.gfx.cameraToObject);
+            take_damage_from_interact_object(m);
+            play_sound(SOUND_MARIO_ATTACKED, m->marioObj->header.gfx.cameraToObject);
 #if ENABLE_RUMBLE
-        queue_rumble_data(70, 60);
+            queue_rumble_data(70, 60);
 #endif
 
-        if (m->action & (ACT_FLAG_SWIMMING | ACT_FLAG_METAL_WATER)) {
-            return drop_and_set_mario_action(m, ACT_WATER_SHOCKED, 0);
-        } else {
-            update_mario_sound_and_camera(m);
-            return drop_and_set_mario_action(m, ACT_SHOCKED, actionArg);
+            if (m->action & (ACT_FLAG_SWIMMING | ACT_FLAG_METAL_WATER)) {
+                return drop_and_set_mario_action(m, ACT_WATER_SHOCKED, 0);
+            } else {
+                update_mario_sound_and_camera(m);
+                return drop_and_set_mario_action(m, ACT_SHOCKED, actionArg);
+            }
         }
     }
 
@@ -1301,7 +1322,7 @@ u32 interact_shock(struct MarioState *m, UNUSED u32 interactType, struct Object 
     return FALSE;
 }
 
-UNUSED static u32 interact_stub(UNUSED struct MarioState *m, UNUSED u32 interactType, struct Object *o) {
+UNUSED u32 interact_stub(UNUSED struct MarioState *m, UNUSED u32 interactType, struct Object *o) {
     if (!(o->oInteractionSubtype & INT_SUBTYPE_DELAY_INVINCIBILITY)) {
         sDelayInvincTimer = TRUE;
     }
@@ -1373,22 +1394,24 @@ u32 interact_bounce_top(struct MarioState *m, UNUSED u32 interactType, struct Ob
     }
 
     if (interaction & INT_ATTACK_NOT_FROM_BELOW) {
+        CALL_CANCELLABLE_EVENT(PlayerBounceOnEnemy, m, o, &interaction) {
 #if ENABLE_RUMBLE
-        queue_rumble_data(5, 80);
+            queue_rumble_data(5, 80);
 #endif
-        attack_object(o, interaction);
-        bounce_back_from_attack(m, interaction);
+            attack_object(o, interaction);
+            bounce_back_from_attack(m, interaction);
 
-        if (interaction & INT_HIT_FROM_ABOVE) {
-            if (o->oInteractionSubtype & INT_SUBTYPE_TWIRL_BOUNCE) {
-                bounce_off_object(m, o, 80.0f);
-                reset_mario_pitch(m);
-                if(!ROM_JP) {
-                    play_sound(SOUND_MARIO_TWIRL_BOUNCE, m->marioObj->header.gfx.cameraToObject);
+            if (interaction & INT_HIT_FROM_ABOVE) {
+                if (o->oInteractionSubtype & INT_SUBTYPE_TWIRL_BOUNCE) {
+                    bounce_off_object(m, o, 80.0f);
+                    reset_mario_pitch(m);
+                    if(!ROM_JP) {
+                        play_sound(SOUND_MARIO_TWIRL_BOUNCE, m->marioObj->header.gfx.cameraToObject);
+                    }
+                    return drop_and_set_mario_action(m, ACT_TWIRLING, 0);
+                } else {
+                    bounce_off_object(m, o, 30.0f);
                 }
-                return drop_and_set_mario_action(m, ACT_TWIRLING, 0);
-            } else {
-                bounce_off_object(m, o, 30.0f);
             }
         }
     } else if (take_damage_and_knock_back(m, o)) {
@@ -1435,22 +1458,24 @@ u32 interact_breakable(struct MarioState *m, UNUSED u32 interactType, struct Obj
     u32 interaction = determine_interaction(m, o);
 
     if (interaction & INT_ATTACK_NOT_WEAK_FROM_ABOVE) {
-        attack_object(o, interaction);
-        bounce_back_from_attack(m, interaction);
+        CALL_CANCELLABLE_EVENT(BreakableHit, m, o, &interaction) {
+            attack_object(o, interaction);
+            bounce_back_from_attack(m, interaction);
 
-        m->interactObj = o;
+            m->interactObj = o;
 
-        switch (interaction) {
-            case INT_HIT_FROM_ABOVE:
-                bounce_off_object(m, o, 30.0f); //! Not in the 0x8F mask
-                break;
+            switch (interaction) {
+                case INT_HIT_FROM_ABOVE:
+                    bounce_off_object(m, o, 30.0f);
+                    break;
 
-            case INT_HIT_FROM_BELOW:
-                hit_object_from_below(m, o);
-                break;
+                case INT_HIT_FROM_BELOW:
+                    hit_object_from_below(m, o);
+                    break;
+            }
+
+            return TRUE;
         }
-
-        return TRUE;
     }
 
     return FALSE;
@@ -1471,9 +1496,9 @@ u32 interact_koopa_shell(struct MarioState *m, UNUSED u32 interactType, struct O
             play_shell_music();
             mario_drop_held_object(m);
 
-            //! Puts Mario in ground action even when in air, making it easy to
-            // escape air actions into crouch slide (shell cancel)
-            return set_mario_action(m, ACT_RIDING_SHELL_GROUND, 0);
+            CALL_CANCELLABLE_EVENT(ShellMounted, m, o) {
+                return set_mario_action(m, ACT_RIDING_SHELL_GROUND, 0);
+            }
         }
 
         push_mario_out_of_object(m, o, 2.0f);
@@ -1511,7 +1536,7 @@ u32 interact_pole(struct MarioState *m, UNUSED u32 interactType, struct Object *
     if (actionId >= 0x080 && actionId < 0x0A0) {
         if (!(m->prevAction & ACT_FLAG_ON_POLE) || m->usedObj != o) {
 #ifdef VERSION_SH
-            f32 velConv = m->forwardVel; // conserve the velocity.
+            f32 velConv = m->forwardVel;
             struct Object *marioObj = m->marioObj;
             u32 lowSpeed;
 #else
@@ -1519,37 +1544,39 @@ u32 interact_pole(struct MarioState *m, UNUSED u32 interactType, struct Object *
             struct Object *marioObj = m->marioObj;
 #endif
 
-            mario_stop_riding_and_holding(m);
+            CALL_CANCELLABLE_EVENT(PoleGrabbed, m, o, &lowSpeed) {
+                mario_stop_riding_and_holding(m);
 
 #ifdef VERSION_SH
-            lowSpeed = (velConv <= 10.0f);
+                lowSpeed = (velConv <= 10.0f);
 #endif
 
-            m->interactObj = o;
-            m->usedObj = o;
-            m->vel[1] = 0.0f;
-            m->forwardVel = 0.0f;
+                m->interactObj = o;
+                m->usedObj = o;
+                m->vel[1] = 0.0f;
+                m->forwardVel = 0.0f;
 
-            marioObj->oMarioPoleUnk108 = 0;
-            marioObj->oMarioPoleYawVel = 0;
-            marioObj->oMarioPolePos = m->pos[1] - o->oPosY;
+                marioObj->oMarioPoleUnk108 = 0;
+                marioObj->oMarioPoleYawVel = 0;
+                marioObj->oMarioPolePos = m->pos[1] - o->oPosY;
 
-            if (lowSpeed) {
-                return set_mario_action(m, ACT_GRAB_POLE_SLOW, 0);
-            }
+                if (lowSpeed) {
+                    return set_mario_action(m, ACT_GRAB_POLE_SLOW, 0);
+                }
 
-            //! @bug Using m->forwardVel here is assumed to be 0.0f due to the set from earlier.
-            //       This is fixed in the Shindou version.
+                //! @bug Using m->forwardVel here is assumed to be 0.0f due to the set from earlier.
+                //       This is fixed in the Shindou version.
 #ifdef VERSION_SH
-            marioObj->oMarioPoleYawVel = (s32)(velConv * 0x100 + 0x1000);
+                marioObj->oMarioPoleYawVel = (s32)(velConv * 0x100 + 0x1000);
 #else
-            marioObj->oMarioPoleYawVel = (s32)(m->forwardVel * 0x100 + 0x1000);
+                marioObj->oMarioPoleYawVel = (s32)(m->forwardVel * 0x100 + 0x1000);
 #endif
-            reset_mario_pitch(m);
+                reset_mario_pitch(m);
 #if ENABLE_RUMBLE
-            queue_rumble_data(5, 80);
+                queue_rumble_data(5, 80);
 #endif
-            return set_mario_action(m, ACT_GRAB_POLE_FAST, 0);
+                return set_mario_action(m, ACT_GRAB_POLE_FAST, 0);
+            }
         }
     }
 
@@ -1573,7 +1600,9 @@ u32 interact_hoot(struct MarioState *m, UNUSED u32 interactType, struct Object *
         queue_rumble_data(5, 80);
 #endif
         update_mario_sound_and_camera(m);
-        return set_mario_action(m, ACT_RIDING_HOOT, 0);
+        CALL_CANCELLABLE_EVENT(HootGrabbed, m, o) {
+            return set_mario_action(m, ACT_RIDING_HOOT, 0);
+        }
     }
 
     return FALSE;
@@ -1608,25 +1637,27 @@ u32 interact_cap(struct MarioState *m, UNUSED u32 interactType, struct Object *o
                 break;
         }
 
-        if (capTime > m->capTimer) {
-            m->capTimer = capTime;
+        CALL_CANCELLABLE_EVENT(PlayerCapGained, m, o, &capFlag, &capTime) {
+            if (capTime > m->capTimer) {
+                m->capTimer = capTime;
+            }
+
+            if ((m->action & ACT_FLAG_IDLE) || m->action == ACT_WALKING) {
+                m->flags |= MARIO_CAP_IN_HAND;
+                set_mario_action(m, ACT_PUTTING_ON_CAP, 0);
+            } else {
+                m->flags |= MARIO_CAP_ON_HEAD;
+            }
+
+            play_sound(SOUND_MENU_STAR_SOUND, m->marioObj->header.gfx.cameraToObject);
+            play_sound(SOUND_MARIO_HERE_WE_GO, m->marioObj->header.gfx.cameraToObject);
+
+            if (capMusic != 0) {
+                play_cap_music(capMusic);
+            }
+
+            return TRUE;
         }
-
-        if ((m->action & ACT_FLAG_IDLE) || m->action == ACT_WALKING) {
-            m->flags |= MARIO_CAP_IN_HAND;
-            set_mario_action(m, ACT_PUTTING_ON_CAP, 0);
-        } else {
-            m->flags |= MARIO_CAP_ON_HEAD;
-        }
-
-        play_sound(SOUND_MENU_STAR_SOUND, m->marioObj->header.gfx.cameraToObject);
-        play_sound(SOUND_MARIO_HERE_WE_GO, m->marioObj->header.gfx.cameraToObject);
-
-        if (capMusic != 0) {
-            play_cap_music(capMusic);
-        }
-
-        return TRUE;
     }
 
     return FALSE;

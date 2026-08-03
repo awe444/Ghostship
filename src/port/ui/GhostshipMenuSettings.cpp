@@ -3,6 +3,7 @@
 #include "Notification.h"
 #include "GhostshipInputEditorWindow.h"
 #include "GhostshipModals.h"
+#include "TouchControls.h"
 #include "UIWidgets.hpp"
 #include <spdlog/fmt/fmt.h>
 
@@ -51,6 +52,18 @@ static const std::unordered_map<int32_t, const char*> notificationPosition = {
     { 0, "Top Left" }, { 1, "Top Right" }, { 2, "Bottom Left" }, { 3, "Bottom Right" }, { 4, "Hidden" },
 };
 
+#ifdef __SWITCH__
+static const std::unordered_map<int32_t, const char*> switchPerformanceProfiles = {
+    { Ship::MAXIMUM, SWITCH_CPU_PROFILES[Ship::MAXIMUM] },
+    { Ship::HIGH, SWITCH_CPU_PROFILES[Ship::HIGH] },
+    { Ship::BOOST, SWITCH_CPU_PROFILES[Ship::BOOST] },
+    { Ship::STOCK, SWITCH_CPU_PROFILES[Ship::STOCK] },
+    { Ship::POWERSAVINGM1, SWITCH_CPU_PROFILES[Ship::POWERSAVINGM1] },
+    { Ship::POWERSAVINGM2, SWITCH_CPU_PROFILES[Ship::POWERSAVINGM2] },
+    { Ship::POWERSAVINGM3, SWITCH_CPU_PROFILES[Ship::POWERSAVINGM3] }
+};
+#endif
+
 void GhostshipMenu::AddMenuSettings() {
     // Add Settings Menu
     AddMenuEntry("Settings", CVAR_SETTING("Menu.SettingsSidebarSection"));
@@ -66,14 +79,17 @@ void GhostshipMenu::AddMenuSettings() {
                      .Tooltip("Changes the Theme of the Menu Widgets.")
                      .ComboMap(menuThemeOptions)
                      .DefaultIndex(Colors::LightBlue));
-#if not defined(__SWITCH__) and not defined(__WIIU__)
     AddWidget(path, "Menu Controller Navigation", WIDGET_CVAR_CHECKBOX)
         .CVar(CVAR_IMGUI_CONTROLLER_NAV)
         .RaceDisable(false)
-        .Options(CheckboxOptions().Tooltip(
-            "Allows controller navigation of the port menu (Settings, Enhancements,...)\nCAUTION: "
-            "This will disable game inputs while the menu is visible.\n\nD-pad to move between "
-            "items, A to select, B to move up in scope."));
+        .Options(CheckboxOptions()
+                     .Tooltip("Allows controller navigation of the port menu (Settings, Enhancements,...)\nCAUTION: "
+                              "This will disable game inputs while the menu is visible.\n\nD-pad to move between "
+                              "items, A to select, B to move up in scope.")
+#ifdef __SWITCH__
+                     .DefaultValue(true)
+#endif
+        );
     AddWidget(path, "Menu Background Opacity", WIDGET_CVAR_SLIDER_FLOAT)
         .CVar(CVAR_SETTING("Menu.BackgroundOpacity"))
         .RaceDisable(false)
@@ -81,6 +97,7 @@ void GhostshipMenu::AddMenuSettings() {
             "Sets the opacity of the background of the port menu."));
 
     AddWidget(path, "General Settings", WIDGET_SEPARATOR_TEXT);
+#if not defined(__SWITCH__) and not defined(__WIIU__)
     AddWidget(path, "Cursor Always Visible", WIDGET_CVAR_CHECKBOX)
         .CVar(CVAR_SETTING("CursorVisibility"))
         .RaceDisable(false)
@@ -107,6 +124,18 @@ void GhostshipMenu::AddMenuSettings() {
         .RaceDisable(false)
         .Options(CheckboxOptions().Tooltip(
             "Search input box gets autofocus when visible. Does not affect using other widgets."));
+#ifdef __SWITCH__
+    AddWidget(path, "Hardware", WIDGET_SEPARATOR_TEXT);
+    AddWidget(path, "Switch performance mode", WIDGET_CVAR_COMBOBOX)
+        .CVar(CVAR_SWITCH_PERF_MODE)
+        .RaceDisable(false)
+        .Callback([](WidgetInfo& info) { Ship::Switch::ApplyOverclock(); })
+        .Options(ComboboxOptions()
+                     .DefaultIndex(Ship::MAXIMUM)
+                     .ComboMap(switchPerformanceProfiles)
+                     .Tooltip("Sets the Nintendo Switch CPU performance profile."));
+#endif
+#if not defined(__SWITCH__) and not defined(__WIIU__)
     AddWidget(path, "Open App Files Folder", WIDGET_BUTTON)
         .RaceDisable(false)
         .Callback([](WidgetInfo& info) {
@@ -114,6 +143,7 @@ void GhostshipMenu::AddMenuSettings() {
             SDL_OpenURL(std::string("file:///" + std::filesystem::absolute(filesPath).string()).c_str());
         })
         .Options(ButtonOptions().Tooltip("Opens the folder that contains the save and mods folders, etc."));
+#endif
     AddWidget(path, "EXPERIMENTAL", WIDGET_SEPARATOR_TEXT).Options(TextOptions().Color(Colors::Orange));
     AddWidget(path, "ImGui Menu Scaling", WIDGET_CVAR_COMBOBOX)
         .CVar(CVAR_SETTING("ImGuiScale"))
@@ -183,10 +213,12 @@ void GhostshipMenu::AddMenuSettings() {
     path.sidebarName = "Graphics";
     AddSidebarEntry("Settings", "Graphics", 3);
     AddWidget(path, "Graphics Options", WIDGET_SEPARATOR_TEXT);
+#ifndef __SWITCH__
     AddWidget(path, "Toggle Fullscreen", WIDGET_BUTTON)
         .RaceDisable(false)
         .Callback([](WidgetInfo& info) { Ship::Context::GetInstance()->GetWindow()->ToggleFullscreen(); })
         .Options(ButtonOptions().Tooltip("Toggles Fullscreen On/Off."));
+#endif
     AddWidget(path, "Internal Resolution", WIDGET_CVAR_SLIDER_FLOAT)
         .CVar(CVAR_INTERNAL_RESOLUTION)
         .RaceDisable(false)
@@ -281,6 +313,45 @@ void GhostshipMenu::AddMenuSettings() {
 
     path.column = SECTION_COLUMN_2;
     AddWidget(path, "Advanced Graphics Options", WIDGET_SEPARATOR_TEXT);
+    AddWidget(path, "HD Texture Upload Budget", WIDGET_CVAR_SLIDER_INT)
+        .CVar("gEnhancements.Graphics.TextureUploadBudget")
+        .RaceDisable(false)
+        .Options(IntSliderOptions()
+                     .Tooltip("Max new HD-pack texture uploads per frame (0 = unlimited). Lower values spread big "
+                              "4K uploads across frames so entering a new area doesn't hitch; the base texture "
+                              "shows until each HD replacement is ready.")
+                     .Min(0)
+                     .Max(8)
+                     .DefaultValue(1));
+    AddWidget(path, "Async Texture Loading", WIDGET_CVAR_CHECKBOX)
+        .CVar("gEnhancements.Graphics.AsyncTextureLoad")
+        .RaceDisable(false)
+        .Options(CheckboxOptions()
+                     .Tooltip("Decodes HD/replacement textures on a background thread instead of blocking the "
+                              "render thread, so loading a level doesn't hitch. The vanilla texture shows until "
+                              "its HD version finishes loading, then swaps in. Only active with Alternative "
+                              "Assets enabled.")
+                     .DefaultValue(false));
+    AddWidget(path, "Debug HD Replacement", WIDGET_CVAR_CHECKBOX)
+        .CVar("gEnhancements.Graphics.TextureReplacementDebug")
+        .RaceDisable(false)
+        .Options(CheckboxOptions()
+                     .Tooltip("Tints draws by HD-replacement state: blue = HD active, green flash = just "
+                              "uploaded, red = base shown while the HD upload is still pending.")
+                     .DefaultValue(false));
+
+    path.sidebarName = "Shaders";
+    path.column = SECTION_COLUMN_1;
+    AddSidebarEntry("Settings", "Shaders", 1);
+
+    AddWidget(path, "Shader Settings", WIDGET_SEPARATOR_TEXT);
+    AddWidget(path, "Popout Shader Settings", WIDGET_WINDOW_BUTTON)
+        .CVar(CVAR_WINDOW("ShaderSettings"))
+        .RaceDisable(false)
+        .WindowName("Shader Settings")
+        .HideInSearch(true)
+        .Options(WindowButtonOptions().Tooltip("Tweakables for shader packs: post-processing passes and @setting "
+                                               "values declared by custom shaders."));
 
     // Controls
     path.sidebarName = "Controls";
@@ -307,6 +378,33 @@ void GhostshipMenu::AddMenuSettings() {
         .WindowName("Configure Controller")
         .HideInSearch(true)
         .Options(WindowButtonOptions().Tooltip("Enables the separate Bindings Window."));
+
+    AddWidget(path, "Touch Controls", WIDGET_SEPARATOR_TEXT);
+    AddWidget(path, "Enable Touch Controls", WIDGET_CVAR_CHECKBOX)
+        .CVar(CVAR_TOUCH("Enabled"))
+        .RaceDisable(false)
+        .Options(CheckboxOptions().Tooltip(
+            "Shows an on-screen virtual controller for touch screens.\nOn desktop the mouse can drive it for "
+            "testing."));
+    AddWidget(path, "Touch Controls Scale", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar(CVAR_TOUCH("Scale"))
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().Min(0.5f).Max(2.0f).DefaultValue(1.0f).Tooltip(
+            "Size of the on-screen buttons and stick."));
+    AddWidget(path, "Touch Controls Opacity", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar(CVAR_TOUCH("Opacity"))
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().Min(0.1f).Max(1.0f).DefaultValue(0.7f).IsPercentage().Tooltip(
+            "Opacity of the on-screen controls."));
+    AddWidget(path, "Edit Touch Layout", WIDGET_BUTTON)
+        .Options(ButtonOptions().Tooltip(
+            "Closes the menu and lets you drag the on-screen controls to new positions.\nTap Done to save or Reset "
+            "to restore the default layout."))
+        .Callback([](WidgetInfo& info) {
+            CVarSetInteger(CVAR_TOUCH("Enabled"), 1);
+            CVarSetInteger(CVAR_TOUCH("EditMode"), 1);
+            Ship::Context::GetInstance()->GetWindow()->GetGui()->GetMenu()->Hide();
+        });
 
     // Input Viewer
     path.sidebarName = "Input Viewer";
@@ -374,6 +472,10 @@ void GhostshipMenu::AddMenuSettings() {
                 .suffix = "Ghostship.",
             });
         })
+        .Options(ButtonOptions().Tooltip("Displays a test notification."));
+    AddWidget(path, "Test Achievement Notification", WIDGET_BUTTON)
+        .RaceDisable(false)
+        .Callback([](WidgetInfo& info) { Notification::EmitAchievement(nullptr, "Harbour Mastery", 0); })
         .Options(ButtonOptions().Tooltip("Displays a test notification."));
 }
 

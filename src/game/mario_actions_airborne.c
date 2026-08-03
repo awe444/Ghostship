@@ -13,6 +13,8 @@
 #include "mario_step.h"
 #include "save_file.h"
 #include "rumble_init.h"
+#include "seq_ids.h"
+#include "port/events/list/PlayerEvent.h"
 
 void play_flip_sounds(struct MarioState *m, s16 frame1, s16 frame2, s16 frame3) {
     s32 animFrame = m->marioObj->header.gfx.animInfo.animFrame;
@@ -61,6 +63,7 @@ s32 check_fall_damage(struct MarioState *m, u32 hardFallAction) {
     f32 damageHeight;
 
     fallHeight = m->peakHeight - m->pos[1];
+    CALL_EVENT(PlayerLanded, m, fallHeight);
 
 #pragma GCC diagnostic push
 #if defined(__clang__)
@@ -472,6 +475,10 @@ s32 act_double_jump(struct MarioState *m) {
 }
 
 s32 act_triple_jump(struct MarioState *m) {
+    if (m->actionTimer == 0) {
+        CALL_EVENT(PlayerTripleJump, m);
+    }
+
     if (gSpecialTripleJump) {
         return set_mario_action(m, ACT_SPECIAL_TRIPLE_JUMP, 0);
     }
@@ -497,6 +504,10 @@ s32 act_triple_jump(struct MarioState *m) {
 }
 
 s32 act_backflip(struct MarioState *m) {
+    if (m->actionTimer == 0) {
+        CALL_EVENT(PlayerBackflip, m);
+    }
+
     if (m->input & INPUT_Z_PRESSED) {
         return set_mario_action(m, ACT_GROUND_POUND, 0);
     }
@@ -606,6 +617,10 @@ s32 act_side_flip(struct MarioState *m) {
 }
 
 s32 act_wall_kick_air(struct MarioState *m) {
+    if (m->actionTimer == 0) {
+        CALL_EVENT(PlayerWallJump, m);
+    }
+
     if (m->input & INPUT_B_PRESSED) {
         return set_mario_action(m, ACT_DIVE, 0);
     }
@@ -621,6 +636,10 @@ s32 act_wall_kick_air(struct MarioState *m) {
 
 s32 act_long_jump(struct MarioState *m) {
     s32 animation;
+    if (m->actionTimer == 0) {
+        CALL_EVENT(PlayerLongJump, m, &m->forwardVel);
+    }
+
     if (!m->marioObj->oMarioLongJumpIsSlow) {
         animation = MARIO_ANIM_FAST_LONGJUMP;
     } else {
@@ -908,6 +927,10 @@ s32 act_ground_pound(struct MarioState *m) {
     play_sound_if_no_flag(m, SOUND_ACTION_THROW, MARIO_ACTION_SOUND_PLAYED);
 
     if (m->actionState == 0) {
+        if (m->actionTimer == 0) {
+            CALL_EVENT(PlayerGroundPoundStart, m);
+        }
+
         if (m->actionTimer < 10) {
             yOffset = 20 - 2 * m->actionTimer;
             if (m->pos[1] + yOffset + 160.0f < m->ceilHeight) {
@@ -936,6 +959,7 @@ s32 act_ground_pound(struct MarioState *m) {
 
         stepResult = perform_air_step(m, 0);
         if (stepResult == AIR_STEP_LANDED) {
+            CALL_EVENT(PlayerGroundPoundLand, m, m->peakHeight - m->pos[1]);
             if (should_get_stuck_in_ground(m)) {
 #if ENABLE_RUMBLE
                 queue_rumble_data(5, 80);
@@ -1539,7 +1563,9 @@ s32 act_lava_boost(struct MarioState *m) {
     }
 
     if (m->health < 0x100) {
-        level_trigger_warp(m, WARP_OP_DEATH);
+        CALL_CANCELLABLE_EVENT(PlayerDeath, m, DEATH_TYPE_LAVA) {
+            level_trigger_warp(m, WARP_OP_DEATH);
+        };
     }
 
     m->marioBodyState->eyeState = MARIO_EYES_DEAD;
@@ -1705,7 +1731,9 @@ s32 act_flying(struct MarioState *m) {
         return set_mario_action(m, ACT_GROUND_POUND, 1);
     }
 
-    if (!(m->flags & MARIO_WING_CAP)) {
+    bool canFly = (m->flags & MARIO_WING_CAP) != 0;
+    CALL_EVENT(FlyingActionUpdate, m, &canFly);
+    if (!canFly) {
         if (m->area->camera->mode == CAMERA_MODE_BEHIND_MARIO) {
             set_camera_mode(m->area->camera, m->area->camera->defMode, 1);
         }
@@ -2016,20 +2044,25 @@ s32 act_special_triple_jump(struct MarioState *m) {
 }
 
 s32 check_common_airborne_cancels(struct MarioState *m) {
-    if (m->pos[1] < m->waterLevel - 100) {
-        return set_water_plunge_action(m);
+    s32 result = FALSE;
+
+    CALL_CANCELLABLE_EVENT(PlayerCheckCommonAirborneCancels, m, &result) {
+        if (m->pos[1] < m->waterLevel - 100) {
+            return set_water_plunge_action(m);
+        }
+
+        if (m->input & INPUT_SQUISHED) {
+            return drop_and_set_mario_action(m, ACT_SQUISHED, 0);
+        }
+
+        if (m->floor->type == SURFACE_VERTICAL_WIND && (m->action & ACT_FLAG_ALLOW_VERTICAL_WIND_ACTION)) {
+            return drop_and_set_mario_action(m, ACT_VERTICAL_WIND, 0);
+        }
+
+        m->quicksandDepth = 0.0f;
     }
 
-    if (m->input & INPUT_SQUISHED) {
-        return drop_and_set_mario_action(m, ACT_SQUISHED, 0);
-    }
-
-    if (m->floor->type == SURFACE_VERTICAL_WIND && (m->action & ACT_FLAG_ALLOW_VERTICAL_WIND_ACTION)) {
-        return drop_and_set_mario_action(m, ACT_VERTICAL_WIND, 0);
-    }
-
-    m->quicksandDepth = 0.0f;
-    return FALSE;
+    return result;
 }
 
 s32 mario_execute_airborne_action(struct MarioState *m) {

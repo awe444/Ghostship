@@ -3,18 +3,15 @@
 
 #include <libultra/types.h>
 
-struct LevelCommand;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-extern u8 level_script_entry[];
-
-struct LevelCommand *level_script_execute(struct LevelCommand *cmd);
-
-#ifdef __cplusplus
+struct LevelCommand {
+    /*00*/ uint8_t type;
+    /*01*/ uint8_t size;
+    /*02*/ // variable sized argument data
 };
-#endif
+
+extern_s const LevelScript level_script_entry[];
+extern_s struct AllocOnlyPool *sLevelPool;
+
+extern_s struct LevelCommand *level_script_execute(struct LevelCommand *cmd);
 
 #endif // LEVEL_SCRIPT_H
