@@ -24,6 +24,39 @@ void C_RunGuiDrawCallbacks();
 #include <ship/window/gui/EventDebuggerWindow.h>
 #include <ship/window/gui/ShaderSettingsWindow.h>
 #include <libultraship/window/gui/GfxDebuggerWindow.h>
+#include <ship/Context.h>
+#include <ship/config/ConsoleVariable.h>
+
+// libultraship only toggles the port menu from GamepadBack/Select when
+// Menu Controller Navigation is enabled. Ghostship adds the same behavior
+// when that setting is off so Select always opens the menu on a gamepad.
+class GamepadMenuToggleInput : public Ship::GuiWindow {
+  public:
+    using GuiWindow::GuiWindow;
+    void InitElement() override {
+    }
+    void DrawElement() override {
+    }
+    void UpdateElement() override {
+        if (CVarGetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0)) {
+            return;
+        }
+        if (!ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false)) {
+            return;
+        }
+
+        auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+        if (auto menu = gui->GetMenu()) {
+            menu->ToggleVisibility();
+        }
+        Ship::Context::GetInstance()->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
+        if (gui->GetMenuOrMenubarVisible()) {
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        } else {
+            ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+        }
+    }
+};
 
 // Invisible host window that fires C mod ImGui callbacks each frame.
 // Overrides Draw() so it never calls ImGui::Begin()/End() itself; the C
@@ -105,6 +138,10 @@ void SetupGuiElements() {
     auto cGuiWindow = std::make_shared<CGuiCallbackWindow>("gWindows.CGuiCallbacks", "##cguicallbacks");
     cGuiWindow->Show();
     gui->AddGuiWindow(cGuiWindow);
+
+    auto gamepadMenuToggle = std::make_shared<GamepadMenuToggleInput>("gWindows.GamepadMenuToggle", "##GamepadMenuToggle");
+    gamepadMenuToggle->Show();
+    gui->AddGuiWindow(gamepadMenuToggle);
 
     mGhostshipMenu = std::make_shared<GhostshipMenu>(CVAR_WINDOW("Menu"), "Settings Menu");
     gui->SetMenu(mGhostshipMenu);
