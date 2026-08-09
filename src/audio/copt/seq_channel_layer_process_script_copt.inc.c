@@ -144,6 +144,11 @@ void seq_channel_layer_process_script(struct SequenceChannelLayer *layer) {
 #endif
 
     sameSound = TRUE;
+
+    if (layer == NULL) {
+        return;
+    }
+
     if ((*layer).enabled == FALSE) {
         return;
     }

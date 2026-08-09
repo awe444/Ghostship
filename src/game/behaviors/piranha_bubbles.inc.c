@@ -1,4 +1,6 @@
 
+#include <math.h>
+
 /**
  * Behavior for bhvPiranhaPlantBubble and bhvPiranhaPlantWakingBubbles.
  *
@@ -31,17 +33,16 @@ void bhv_piranha_plant_bubble_loop(void) {
     struct Object *parent = o->parentObj; // the Piranha Plant
     f32 scale = 0;
     s32 i;
-    s32 animFrame = parent->header.gfx.animInfo.animFrame;
-    // TODO: rename lastFrame if it is inaccurate
-    s32 lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
     UNUSED u8 filler[4];
 
-    cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f);
+    if (parent == NULL || parent == o || parent->activeFlags == ACTIVE_FLAG_DEACTIVATED) {
+        obj_mark_for_deletion(o);
+        return;
+    }
 
     switch (o->oAction) {
         case PIRANHA_PLANT_BUBBLE_ACT_IDLE:
             cur_obj_disable_rendering();
-            scale = 0;
 
             if (parent->oAction == PIRANHA_PLANT_ACT_SLEEPING) {
                 o->oAction++; // move to PIRANHA_PLANT_BUBBLE_ACT_GROW_SHRINK_LOOP
@@ -49,6 +50,31 @@ void bhv_piranha_plant_bubble_loop(void) {
             break;
 
         case PIRANHA_PLANT_BUBBLE_ACT_GROW_SHRINK_LOOP:
+        {
+            // TODO: rename lastFrame if it is inaccurate
+            s32 animFrame;
+            s32 lastFrame;
+
+            if (parent->header.gfx.animInfo.curAnim == NULL) {
+                break;
+            }
+
+            animFrame = parent->header.gfx.animInfo.animFrame;
+            lastFrame = parent->header.gfx.animInfo.curAnim->loopEnd - 2;
+
+            // Inline cur_obj_set_pos_relative(parent, 0, 72.0f, 180.0f) using
+            // cosf/sinf to avoid gSineTable page boundary access issue on ARM64.
+            {
+                f32 angle_rad = (f32)((u16)parent->oMoveAngleYaw) * (f32)(2.0 * M_PI / 65536.0);
+                f32 facingZ = cosf(angle_rad);
+                f32 facingX = sinf(angle_rad);
+
+                o->oMoveAngleYaw = parent->oMoveAngleYaw;
+                o->oPosX = parent->oPosX + 180.0f * facingX;
+                o->oPosY = parent->oPosY + 72.0f;
+                o->oPosZ = parent->oPosZ + 180.0f * facingZ;
+            }
+
             if (parent->oDistanceToMario < parent->oDrawingDistance) {
                 cur_obj_enable_rendering();
 
@@ -67,13 +93,18 @@ void bhv_piranha_plant_bubble_loop(void) {
                     // Note that the bubble always starts this loop at its largest.
                     if (animFrame < doneShrinkingFrame) {
                         // Shrink from 5.0f to 1.0f.
-                        scale = coss(animFrame / doneShrinkingFrame * 0x4000) * 4.0f + 1.0;
+                        // Use cosf instead of coss table lookup to avoid
+                        // gSineTable page boundary access issue on ARM64.
+                        // coss(ratio * 0x4000) = cos(ratio * pi/2)
+                        scale = cosf(animFrame / doneShrinkingFrame * (f32)(M_PI / 2)) * 4.0f + 1.0f;
                     } else if (animFrame > beginGrowingFrame) {
                         // Grow from 1.0f to 5.0f.
-                        scale = sins((
+                        // Use sinf instead of sins table lookup (same reason).
+                        // sins(ratio * 0x4000) = sin(ratio * pi/2)
+                        scale = sinf((
                                     // they should have used beginGrowingFrame here:
                                     (animFrame - (lastFrame / 2.0f + 4.0f)) / beginGrowingFrame
-                                    ) * 0x4000) * 4.0f + 1.0;
+                                    ) * (f32)(M_PI / 2)) * 4.0f + 1.0f;
                     } else {
                         // Stay at 1.0f for a few frames.
                         scale = 1.0f;
@@ -86,6 +117,7 @@ void bhv_piranha_plant_bubble_loop(void) {
                 cur_obj_disable_rendering();
             }
             break;
+        }
 
         case PIRANHA_PLANT_BUBBLE_ACT_BURST:
             cur_obj_disable_rendering();
