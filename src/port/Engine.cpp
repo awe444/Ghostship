@@ -515,8 +515,8 @@ void GameEngine::FinishInit() {
     Instance->AudioInit();
     Instance->LoadDictionary();
     Instance->LoadPlayerAnims();
-#if defined(__SWITCH__) || defined(__WIIU__)
-    CVarRegisterInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // always enable controller nav on switch/wii u
+#if defined(__SWITCH__) || defined(__WIIU__) || defined(__ANDROID__)
+    CVarRegisterInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // gamepad opens and navigates the menu
 #endif
     GhostshipGui::SetupGuiElements();
     DevConsole_Init();

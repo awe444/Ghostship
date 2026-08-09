@@ -177,6 +177,13 @@ android {
     }
 }
 
+// AGP does not infer a task dependency from assets.srcDir(Provider), so the
+// packaged zip and version stamp would be missing from the APK unless these
+// run before asset merge.
+tasks.named("preBuild") {
+    dependsOn(stampGameData)
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)

@@ -83,10 +83,14 @@ void GhostshipMenu::AddMenuSettings() {
         .CVar(CVAR_IMGUI_CONTROLLER_NAV)
         .RaceDisable(false)
         .Options(CheckboxOptions()
-                     .Tooltip("Allows controller navigation of the port menu (Settings, Enhancements,...)\nCAUTION: "
+                     .Tooltip("Allows controller navigation of the port menu (Settings, Enhancements,...)\n"
+                              "Select/Back on a gamepad also opens and closes the menu.\nCAUTION: "
                               "This will disable game inputs while the menu is visible.\n\nD-pad to move between "
                               "items, A to select, B to move up in scope.")
 #ifdef __SWITCH__
+                     .DefaultValue(true)
+#endif
+#ifdef __ANDROID__
                      .DefaultValue(true)
 #endif
         );
